@@ -1,0 +1,82 @@
+name: build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Test and build
+        run: ./gradlew build --no-daemon
+
+      - name: The CLI runs and describes itself
+        run: |
+          set -euo pipefail
+          JAR=$(ls build/libs/shadersmith-*.jar | grep -v thin)
+          java -jar "$JAR" --version
+          java -jar "$JAR" --help
+          java -jar "$JAR" contract --list
+
+      # The fixture pack is written for 26.2 and must fail on 26.3 for the reasons the README lists.
+      - name: the fixture is caught on 26.3 and passes on 1.21.10
+        run: |
+          set -euo pipefail
+          JAR=$(ls build/libs/shadersmith-*.jar | grep -v thin)
+          set +e
+          java -jar "$JAR" check src/test/resources/oldpack --mc 26.3-pre-1 --json > findings.json
+          code=$?
+          set -e
+          test "$code" = "1" || { echo "expected exit 1 for a pack with errors, got $code"; exit 1; }
+          jq -e '[.[] | select(.rule == "SM041")] | length == 1' findings.json
+          jq -e '[.[] | select(.rule == "SM030")] | length == 2' findings.json
+          jq -e '[.[] | select(.rule == "SM020")] | length == 1' findings.json
+          java -jar "$JAR" check src/test/resources/oldpack --mc 1.21.10
+
+      - name: SARIF output is well formed
+        run: |
+          set -euo pipefail
+          JAR=$(ls build/libs/shadersmith-*.jar | grep -v thin)
+          java -jar "$JAR" check src/test/resources/oldpack --mc 26.2 --sarif out.sarif || true
+          jq -e '.version == "2.1.0"' out.sarif
+          jq -e '.runs[0].tool.driver.name == "shadersmith"' out.sarif
+          jq -e '.runs[0].results | length > 0' out.sarif
+
+      - name: migrate writes a pack that re-checks with only manual work left
+        run: |
+          set -euo pipefail
+          JAR=$(ls build/libs/shadersmith-*.jar | grep -v thin)
+          java -jar "$JAR" migrate src/test/resources/oldpack --to 26.3-pre-1 --write --out /tmp/migrated
+          set +e
+          java -jar "$JAR" check /tmp/migrated --mc 26.3-pre-1 --json > after.json
+          set -e
+          # Everything mechanical is gone; only layout(location) remains, which needs a person.
+          jq -e '[.[] | select(.severity == "error") | .rule] | unique == ["SM050"]' after.json
+
+      - name: a scaffolded post effect passes its own check
+        run: |
+          set -euo pipefail
+          JAR=$(ls build/libs/shadersmith-*.jar | grep -v thin)
+          java -jar "$JAR" new vignette --ns cifx --mc 26.3-pre-1 --uniform Strength:float=0.6 --always-on --out /tmp/fx
+          test -f /tmp/fx/assets/cifx/post_effect/vignette.json
+          test -f /tmp/fx/assets/cifx/shaders/post/vignette.fsh
+          test -f /tmp/fx/assets/minecraft/post_effect/end_of_frame.json
+          java -jar "$JAR" check /tmp/fx --mc 26.3-pre-1
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: shadersmith-jar
+          path: build/libs/shadersmith-*.jar
+          if-no-files-found: error
