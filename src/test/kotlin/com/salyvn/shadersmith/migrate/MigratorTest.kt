@@ -1,18 +1,26 @@
 package com.salyvn.shadersmith.migrate
 
+import com.github.ajalt.clikt.testing.test
+import com.salyvn.shadersmith.cli.MigrateCommand
 import com.salyvn.shadersmith.contract.ContractChecker
 import com.salyvn.shadersmith.contract.ContractDataset
 import com.salyvn.shadersmith.pack.PackFile
 import com.salyvn.shadersmith.pack.PackSource
 import com.salyvn.shadersmith.report.Severity
+import org.junit.jupiter.api.Assertions.assertArrayEquals
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertNull
+import org.junit.jupiter.api.Assertions.assertThrows
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
+import java.io.IOException
 import java.nio.file.Files
 import java.nio.file.Path
+import java.util.zip.ZipEntry
+import java.util.zip.ZipFile
+import java.util.zip.ZipOutputStream
 
 class MigratorTest {
 
@@ -109,5 +117,87 @@ class MigratorTest {
         assertTrue(file.isShaderSource)
         assertFalse(file.isGlslInclude)
         assertTrue(PackFile("assets/vnfx/post_effect/vignette.json", "").isPostEffectDefinition)
+    }
+
+    @Test
+    fun `migrating a zip pack preserves binary assets and writes deterministic zip with sha1`() {
+        val stagedSrc = directory.resolve("src-pack")
+        Files.walk(Path.of("src/test/resources/oldpack")).use { stream ->
+            stream.forEach { src ->
+                val rel = Path.of("src/test/resources/oldpack").relativize(src)
+                val dst = stagedSrc.resolve(rel.toString())
+                if (Files.isDirectory(src)) {
+                    Files.createDirectories(dst)
+                } else {
+                    Files.createDirectories(dst.parent)
+                    Files.copy(src, dst)
+                }
+            }
+        }
+        val pngBytes = byteArrayOf(0x89.toByte(), 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x01, 0x02, 0x03)
+        val pngPath = stagedSrc.resolve("assets/minecraft/textures/gui/hud_bar.png")
+        Files.createDirectories(pngPath.parent)
+        Files.write(pngPath, pngBytes)
+
+        val inputZip = directory.resolve("input-pack.zip")
+        PackSource.writeDeterministicZip(stagedSrc, inputZip)
+
+        val outDir = directory.resolve("migrated-dir")
+        val outZip1 = directory.resolve("migrated-1.zip")
+        val outZip2 = directory.resolve("migrated-2.zip")
+
+        val res1 = MigrateCommand().test(
+            listOf(
+                inputZip.toString(),
+                "--to",
+                "26.3-pre-1",
+                "--write",
+                "--out",
+                outDir.toString(),
+                "--zip",
+                outZip1.toString(),
+            ),
+        )
+        assertEquals(0, res1.statusCode, res1.stderr)
+        assertTrue(res1.output.contains("resource-pack-sha1="), res1.output)
+
+        assertTrue(Files.exists(outDir.resolve("pack.mcmeta")), "pack.mcmeta preserved from zip")
+        assertArrayEquals(pngBytes, Files.readAllBytes(outDir.resolve("assets/minecraft/textures/gui/hud_bar.png")))
+        assertFalse(Files.exists(outDir.resolve("assets/minecraft/shaders/core/rendertype_text.json")))
+        assertTrue(
+            Files.readString(outDir.resolve("assets/minecraft/shaders/core/gui.vsh")).contains("gl_VertexIndex"),
+        )
+
+        val res2 = MigrateCommand().test(
+            listOf(
+                inputZip.toString(),
+                "--to",
+                "26.3-pre-1",
+                "--zip",
+                outZip2.toString(),
+            ),
+        )
+        assertEquals(0, res2.statusCode, res2.stderr)
+        assertArrayEquals(Files.readAllBytes(outZip1), Files.readAllBytes(outZip2), "zip output must be byte-deterministic")
+
+        ZipFile(outZip2.toFile()).use { zf ->
+            val pngEntry = zf.getEntry("assets/minecraft/textures/gui/hud_bar.png")
+            assertTrue(pngEntry != null, "binary texture preserved inside output zip")
+            assertNull(zf.getEntry("assets/minecraft/shaders/core/rendertype_text.json"))
+        }
+    }
+
+    @Test
+    fun `extractAllSafely rejects zip slip traversal entries`() {
+        val evilZip = directory.resolve("evil.zip")
+        ZipOutputStream(Files.newOutputStream(evilZip)).use { zos ->
+            zos.putNextEntry(ZipEntry("../../escaped.txt"))
+            zos.write("boom".toByteArray())
+            zos.closeEntry()
+        }
+        val target = directory.resolve("extract-dest")
+        assertThrows(IOException::class.java) {
+            PackSource.extractAllSafely(evilZip, target)
+        }
     }
 }

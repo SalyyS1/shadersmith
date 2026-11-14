@@ -3,13 +3,14 @@ name: build
 on:
   push:
     branches: [main]
+    tags: ['v*']
   pull_request:
 
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - uses: actions/setup-java@v4
         with:
@@ -29,8 +30,7 @@ jobs:
           java -jar "$JAR" --help
           java -jar "$JAR" contract --list
 
-      # The fixture pack is written for 26.2 and must fail on 26.3 for the reasons the README lists.
-      - name: the fixture is caught on 26.3 and passes on 1.21.10
+      - name: Fixture pack is caught on 26.3 and passes on 1.21.10
         run: |
           set -euo pipefail
           JAR=$(ls build/libs/shadersmith-*.jar | grep -v thin)
@@ -53,18 +53,18 @@ jobs:
           jq -e '.runs[0].tool.driver.name == "shadersmith"' out.sarif
           jq -e '.runs[0].results | length > 0' out.sarif
 
-      - name: migrate writes a pack that re-checks with only manual work left
+      - name: Migrate writes directory and deterministic zip with sha1
         run: |
           set -euo pipefail
           JAR=$(ls build/libs/shadersmith-*.jar | grep -v thin)
-          java -jar "$JAR" migrate src/test/resources/oldpack --to 26.3-pre-1 --write --out /tmp/migrated
+          java -jar "$JAR" migrate src/test/resources/oldpack --to 26.3-pre-1 --write --out /tmp/migrated --zip /tmp/migrated.zip | tee /tmp/migrate.out
+          grep -q "resource-pack-sha1=" /tmp/migrate.out
           set +e
-          java -jar "$JAR" check /tmp/migrated --mc 26.3-pre-1 --json > after.json
+          java -jar "$JAR" check /tmp/migrated.zip --mc 26.3-pre-1 --json > after.json
           set -e
-          # Everything mechanical is gone; only layout(location) remains, which needs a person.
           jq -e '[.[] | select(.severity == "error") | .rule] | unique == ["SM050"]' after.json
 
-      - name: a scaffolded post effect passes its own check
+      - name: A scaffolded post effect passes its own check
         run: |
           set -euo pipefail
           JAR=$(ls build/libs/shadersmith-*.jar | grep -v thin)
@@ -74,7 +74,7 @@ jobs:
           test -f /tmp/fx/assets/minecraft/post_effect/end_of_frame.json
           java -jar "$JAR" check /tmp/fx --mc 26.3-pre-1
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v5
         if: always()
         with:
           name: shadersmith-jar

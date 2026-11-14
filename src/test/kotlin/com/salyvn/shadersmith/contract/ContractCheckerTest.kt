@@ -6,6 +6,8 @@ import com.salyvn.shadersmith.report.Severity
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
+import org.junit.jupiter.api.io.TempDir
+import java.nio.file.Files
 import java.nio.file.Path
 
 /**
@@ -86,5 +88,60 @@ class ContractCheckerTest {
         val severities = findings.map { it.severity.ordinal }
 
         assertEquals(severities.sorted(), severities)
+    }
+
+    @Test
+    fun `resolves pack mcmeta overlays per format and checks SM032 SM064 SM074`(@TempDir dir: Path) {
+        val packDir = dir.resolve("overlay-pack")
+        Files.createDirectories(packDir.resolve("assets/myfx/shaders/core"))
+        Files.createDirectories(packDir.resolve("assets/myfx/post_effect"))
+        Files.createDirectories(packDir.resolve("overlay_26_3/assets/myfx/shaders/include"))
+
+        Files.writeString(
+            packDir.resolve("pack.mcmeta"),
+            """
+            {
+              "pack": { "min_format": 63, "max_format": 99, "pack_format": 63, "supported_formats": [63, 64] },
+              "overlays": {
+                "entries": [
+                  { "directory": "overlay_26_3", "min_format": 90, "max_format": 99 },
+                  { "directory": "missing_overlay", "formats": [80, 89] }
+                ]
+              }
+            }
+            """.trimIndent(),
+        )
+        // Shader includes myfx:math.glsl -> missing on 26.2 (format 88), satisfied on 26.3-pre-1 (format 97) via overlay_26_3!
+        Files.writeString(
+            packDir.resolve("assets/myfx/shaders/core/custom.fsh"),
+            "#version 330\n#include <myfx:math.glsl>\nlayout(location = 0) out vec4 fragColor;\nvoid main() { fragColor = vec4(1.0); }\n",
+        )
+        Files.writeString(
+            packDir.resolve("overlay_26_3/assets/myfx/shaders/include/math.glsl"),
+            "float helper() { return 1.0; }\n",
+        )
+        Files.writeString(
+            packDir.resolve("assets/myfx/post_effect/broken.json"),
+            """
+            {
+              "targets": {},
+              "passes": [
+                {
+                  "vertex_shader": "minecraft:core/screenquad",
+                  "fragment_shader": "myfx:post/missing_frag"
+                }
+              ]
+            }
+            """.trimIndent(),
+        )
+
+        val src = PackSource.read(packDir)
+        val on262 = ContractChecker(dataset.resolve("26.2")).check(src)
+        assertTrue(on262.any { it.rule == "SM032" }, "Missing myfx:math.glsl on 26.2 before overlay activates")
+        assertTrue(on262.any { it.rule == "SM064" }, "Missing myfx:post/missing_frag.fsh flagged")
+        assertTrue(on262.any { it.rule == "SM074" }, "Empty/missing overlay directory flagged")
+
+        val on263 = ContractChecker(dataset.resolve("26.3-pre-1")).check(src)
+        assertTrue(on263.none { it.rule == "SM032" }, "overlay_26_3 provides myfx:math.glsl on 26.3-pre-1")
     }
 }

@@ -8,25 +8,25 @@ import com.salyvn.shadersmith.report.Fix
 import com.salyvn.shadersmith.report.Severity
 
 /**
- * Checks one pack against one version's contract.
- *
- * Each rule below corresponds to a change that was verified by reading the vanilla files on both sides
- * of it. They are ordered roughly by how badly they fail: a pack that is refused outright is a nuisance,
- * a pack that loads and quietly reads the wrong uniform is a bug report three weeks later.
+ * Checks one pack against one version's contract, resolving active `pack.mcmeta` overlays for the version's
+ * pack format before checking shaders and post-effect definitions.
  */
 class ContractChecker(private val contract: VersionContract) {
 
     fun check(pack: PackSource): List<Finding> {
         val findings = mutableListOf<Finding>()
-        pack.files.forEach { file ->
+        val parsedMeta = pack.packMeta?.let { checkPackMeta(pack, it, findings) }
+        val effective = pack.effectiveFiles(contract.packFormat, parsedMeta?.overlays ?: emptyList())
+        val effectivePaths = effective.map { it.relative }.toSet()
+
+        effective.forEach { file ->
             when {
                 file.shaderDirectory == "core" && file.fileName.endsWith(".json") -> checkCoreJson(file, findings)
                 file.shaderDirectory == "post" && file.fileName.endsWith(".json") -> checkPostJson(file, findings)
-                file.isShaderSource -> checkSource(file, GlslSource(file.text), findings)
-                file.isPostEffectDefinition -> checkPostEffect(file, findings)
+                file.isShaderSource -> checkSource(file, GlslSource(file.text), effectivePaths, findings)
+                file.isPostEffectDefinition -> checkPostEffect(file, effectivePaths, findings)
             }
         }
-        pack.packMeta?.let { checkPackMeta(it, findings) }
         return findings.sortedWith(compareBy({ it.severity.ordinal }, { it.file }, { it.line ?: 0 }))
     }
 
@@ -37,7 +37,7 @@ class ContractChecker(private val contract: VersionContract) {
             rule = "SM001",
             severity = Severity.WARNING,
             version = contract.id,
-            file = file.relative,
+            file = file.physicalRelative,
             line = null,
             message = "Program definitions under shaders/core were removed in 1.21.5. This file is ignored " +
                 "on ${contract.id}, and whatever it used to point a render type at no longer happens.",
@@ -52,7 +52,7 @@ class ContractChecker(private val contract: VersionContract) {
             rule = "SM002",
             severity = Severity.WARNING,
             version = contract.id,
-            file = file.relative,
+            file = file.physicalRelative,
             line = null,
             message = "Post program configs under shaders/post were removed in 1.21.5; a post effect names " +
                 "its vertex_shader and fragment_shader directly. This file is ignored on ${contract.id}.",
@@ -60,10 +60,15 @@ class ContractChecker(private val contract: VersionContract) {
         )
     }
 
-    private fun checkSource(file: PackFile, source: GlslSource, out: MutableList<Finding>) {
+    private fun checkSource(
+        file: PackFile,
+        source: GlslSource,
+        effectivePaths: Set<String>,
+        out: MutableList<Finding>,
+    ) {
         checkOverridesVanilla(file, out)
         checkVersionLine(file, source, out)
-        checkDirectives(file, source, out)
+        checkDirectives(file, source, effectivePaths, out)
         checkBlocks(file, source, out)
         checkInterfaceLayout(file, source, out)
         checkVertexId(file, source, out)
@@ -84,7 +89,7 @@ class ContractChecker(private val contract: VersionContract) {
                     rule = "SM010",
                     severity = Severity.NOTE,
                     version = contract.id,
-                    file = file.relative,
+                    file = file.physicalRelative,
                     line = null,
                     message = "Replaces a vanilla include, which every vanilla program that includes it will " +
                         "now compile against. Two packs doing this to the same file cannot both win.",
@@ -96,18 +101,13 @@ class ContractChecker(private val contract: VersionContract) {
             rule = "SM011",
             severity = Severity.WARNING,
             version = contract.id,
-            file = file.relative,
+            file = file.physicalRelative,
             line = null,
             message = "There is no ${file.shaderDirectory}/${file.fileName} in vanilla ${contract.id}, so nothing " +
                 "loads this file. It was probably written for a version that had it, or the name changed.",
         )
     }
 
-    /**
-     * Two rules about `#version`: the number must match what the version's own shaders declare, and from
-     * 26.3 an include must not carry one at all, because the compiler wants it on the first line of the
-     * main unit only.
-     */
     private fun checkVersionLine(file: PackFile, source: GlslSource, out: MutableList<Finding>) {
         val declared = source.version
         if (file.isGlslInclude) {
@@ -116,7 +116,7 @@ class ContractChecker(private val contract: VersionContract) {
                     rule = "SM020",
                     severity = Severity.ERROR,
                     version = contract.id,
-                    file = file.relative,
+                    file = file.physicalRelative,
                     line = declared.second,
                     message = "An include must not declare #version on ${contract.id}; the directive belongs on the " +
                         "first line of the main shader only, and a second one fails compilation.",
@@ -131,7 +131,7 @@ class ContractChecker(private val contract: VersionContract) {
                 rule = "SM021",
                 severity = Severity.ERROR,
                 version = contract.id,
-                file = file.relative,
+                file = file.physicalRelative,
                 line = 1,
                 message = "No #version line. Vanilla ${contract.id} shaders declare #version $expected.",
             )
@@ -140,7 +140,7 @@ class ContractChecker(private val contract: VersionContract) {
                 rule = "SM022",
                 severity = Severity.WARNING,
                 version = contract.id,
-                file = file.relative,
+                file = file.physicalRelative,
                 line = declared.second,
                 message = "#version ${declared.first} where vanilla ${contract.id} uses #version $expected.",
                 fix = Fix.ReplaceLine(declared.second, "#version $expected"),
@@ -148,8 +148,13 @@ class ContractChecker(private val contract: VersionContract) {
         }
     }
 
-    /** `#moj_import` became `#include` at 26.3; the target syntax stayed the same. */
-    private fun checkDirectives(file: PackFile, source: GlslSource, out: MutableList<Finding>) {
+    /** `#moj_import` became `#include` at 26.3; checks both vanilla and custom-namespaced include targets. */
+    private fun checkDirectives(
+        file: PackFile,
+        source: GlslSource,
+        effectivePaths: Set<String>,
+        out: MutableList<Finding>,
+    ) {
         val expected = contract.includeDirective ?: return
         source.includes.forEach { directive ->
             if (directive.directive != expected) {
@@ -157,7 +162,7 @@ class ContractChecker(private val contract: VersionContract) {
                     rule = "SM030",
                     severity = Severity.ERROR,
                     version = contract.id,
-                    file = file.relative,
+                    file = file.physicalRelative,
                     line = directive.line,
                     message = "#${directive.directive} is not the include directive on ${contract.id}; it is " +
                         "#$expected. The file will not preprocess.",
@@ -166,26 +171,35 @@ class ContractChecker(private val contract: VersionContract) {
             }
             val target = directive.target.substringAfter(':')
             if (directive.target.startsWith("minecraft:") || !directive.target.contains(':')) {
-                if (target !in contract.includeNames) {
+                val customMinecraftInclude = "assets/minecraft/shaders/include/$target"
+                if (target !in contract.includeNames && customMinecraftInclude !in effectivePaths) {
                     out += Finding(
                         rule = "SM031",
                         severity = Severity.ERROR,
                         version = contract.id,
-                        file = file.relative,
+                        file = file.physicalRelative,
                         line = directive.line,
                         message = "Includes '${directive.target}', which vanilla ${contract.id} does not have. " +
                             "Known includes: ${contract.includeFiles.joinToString(", ")}.",
+                    )
+                }
+            } else {
+                val ns = directive.target.substringBefore(':')
+                val expectedEntry = "assets/$ns/shaders/include/$target"
+                if (expectedEntry !in effectivePaths) {
+                    out += Finding(
+                        rule = "SM032",
+                        severity = Severity.ERROR,
+                        version = contract.id,
+                        file = file.physicalRelative,
+                        line = directive.line,
+                        message = "Includes '${directive.target}', but '$expectedEntry' does not exist in the pack.",
                     )
                 }
             }
         }
     }
 
-    /**
-     * The rule that matters most. A `layout(std140) uniform` block is matched to the engine's buffer by
-     * name, and its members by position. A block with the right names in the wrong order — or with a member
-     * the version no longer has — compiles cleanly and reads the neighbouring bytes.
-     */
     private fun checkBlocks(file: PackFile, source: GlslSource, out: MutableList<Finding>) {
         source.blocks.forEach { block ->
             val expected = contract.uniformBlocks[block.name] ?: return@forEach
@@ -206,7 +220,7 @@ class ContractChecker(private val contract: VersionContract) {
                 rule = if (sameSet) "SM040" else "SM041",
                 severity = Severity.ERROR,
                 version = contract.id,
-                file = file.relative,
+                file = file.physicalRelative,
                 line = block.line,
                 message = message,
                 fix = Fix.RewriteFile { text -> rewriteBlock(text, block.name, expected) },
@@ -223,7 +237,7 @@ class ContractChecker(private val contract: VersionContract) {
                 rule = "SM050",
                 severity = Severity.ERROR,
                 version = contract.id,
-                file = file.relative,
+                file = file.physicalRelative,
                 line = line,
                 message = "'$declaration' has no layout(location = N). Vanilla ${contract.id} qualifies every " +
                     "in/out with an explicit location; the compiler requires it. Locations are assigned in " +
@@ -241,7 +255,7 @@ class ContractChecker(private val contract: VersionContract) {
                 rule = "SM051",
                 severity = Severity.ERROR,
                 version = contract.id,
-                file = file.relative,
+                file = file.physicalRelative,
                 line = line,
                 message = "gl_VertexID is gl_VertexIndex on ${contract.id}.",
                 fix = Fix.ReplaceLine(line, source.text.lines()[line - 1].replace("gl_VertexID", "gl_VertexIndex")),
@@ -249,15 +263,19 @@ class ContractChecker(private val contract: VersionContract) {
         }
     }
 
-    /** Post effect definitions changed shape twice; the old shapes are read as errors, not ignored. */
-    private fun checkPostEffect(file: PackFile, out: MutableList<Finding>) {
+    /** Post effect definitions changed shape twice; also checks custom-namespaced shader file existence. */
+    private fun checkPostEffect(
+        file: PackFile,
+        effectivePaths: Set<String>,
+        out: MutableList<Finding>,
+    ) {
         val text = file.text
         if ("\"program\"" in text && contract.postEffectSchema != "program-ref") {
             out += Finding(
                 rule = "SM060",
                 severity = Severity.ERROR,
                 version = contract.id,
-                file = file.relative,
+                file = file.physicalRelative,
                 line = null,
                 message = "A pass with \"program\" is the 1.21.2-1.21.4 shape. On ${contract.id} a pass names " +
                     "\"vertex_shader\" and \"fragment_shader\" directly.",
@@ -268,7 +286,7 @@ class ContractChecker(private val contract: VersionContract) {
                 rule = "SM061",
                 severity = Severity.ERROR,
                 version = contract.id,
-                file = file.relative,
+                file = file.physicalRelative,
                 line = null,
                 message = "\"uniforms\" is a list, which is the 1.21.5 shape. On ${contract.id} it is a map " +
                     "from uniform block name to a list of {name, type, value}.",
@@ -281,11 +299,43 @@ class ContractChecker(private val contract: VersionContract) {
                     rule = "SM062",
                     severity = Severity.WARNING,
                     version = contract.id,
-                    file = file.relative,
+                    file = file.physicalRelative,
                     line = null,
                     message = "Pass vertex_shader '$declared'; vanilla ${contract.id} post passes use " +
                         "'${contract.postPassVertexShader}'. If '$declared' is not in the pack, the pass fails.",
                 )
+            } else if (declared.contains(':') && !declared.startsWith("minecraft:")) {
+                val ns = declared.substringBefore(':')
+                val relPath = declared.substringAfter(':')
+                val expectedVsh = "assets/$ns/shaders/$relPath.vsh"
+                if (expectedVsh !in effectivePaths) {
+                    out += Finding(
+                        rule = "SM064",
+                        severity = Severity.ERROR,
+                        version = contract.id,
+                        file = file.physicalRelative,
+                        line = null,
+                        message = "Pass references vertex_shader '$declared', but '$expectedVsh' is missing from the pack.",
+                    )
+                }
+            }
+        }
+        Regex("\"fragment_shader\"\\s*:\\s*\"([^\"]+)\"").findAll(text).forEach { match ->
+            val declared = match.groupValues[1]
+            if (declared.contains(':') && !declared.startsWith("minecraft:")) {
+                val ns = declared.substringBefore(':')
+                val relPath = declared.substringAfter(':')
+                val expectedFsh = "assets/$ns/shaders/$relPath.fsh"
+                if (expectedFsh !in effectivePaths) {
+                    out += Finding(
+                        rule = "SM064",
+                        severity = Severity.ERROR,
+                        version = contract.id,
+                        file = file.physicalRelative,
+                        line = null,
+                        message = "Pass references fragment_shader '$declared', but '$expectedFsh' is missing from the pack.",
+                    )
+                }
             }
         }
         val id = file.fileName.removeSuffix(".json")
@@ -294,7 +344,7 @@ class ContractChecker(private val contract: VersionContract) {
                 rule = "SM063",
                 severity = Severity.WARNING,
                 version = contract.id,
-                file = file.relative,
+                file = file.physicalRelative,
                 line = null,
                 message = "minecraft:transparency was removed in 26.3 along with the Fabulous transparency chain. " +
                     "Anything hooked into it no longer runs.",
@@ -303,24 +353,24 @@ class ContractChecker(private val contract: VersionContract) {
         }
     }
 
-    /** The declared range has to include the version being checked, or none of the above matters. */
-    private fun checkPackMeta(file: PackFile, out: MutableList<Finding>) {
+    /** Validates `pack.mcmeta` format fields and overlay directories, returning the parsed metadata. */
+    private fun checkPackMeta(pack: PackSource, file: PackFile, out: MutableList<Finding>): DeclaredRange? {
         val range = PackMetaReader.read(file.text) ?: run {
-            out += Finding("SM070", Severity.ERROR, contract.id, file.relative, null, "pack.mcmeta is not readable JSON with a \"pack\" section.")
-            return
+            out += Finding("SM070", Severity.ERROR, contract.id, file.physicalRelative, null, "pack.mcmeta is not readable JSON with a \"pack\" section.")
+            return null
         }
         val min = range.effectiveMin
         val max = range.effectiveMax
         if (min == null || max == null) {
-            out += Finding("SM071", Severity.ERROR, contract.id, file.relative, null, "pack.mcmeta declares no pack format at all.")
-            return
+            out += Finding("SM071", Severity.ERROR, contract.id, file.physicalRelative, null, "pack.mcmeta declares no pack format at all.")
+            return range
         }
         if (contract.packFormat < min || contract.packFormat > max) {
             out += Finding(
                 rule = "SM072",
                 severity = Severity.WARNING,
                 version = contract.id,
-                file = file.relative,
+                file = file.physicalRelative,
                 line = null,
                 message = "pack.mcmeta claims formats $min..$max, and ${contract.id} is format ${contract.packFormat}. " +
                     "The client lists the pack as incompatible before any shader is read.",
@@ -331,12 +381,25 @@ class ContractChecker(private val contract: VersionContract) {
                 rule = "SM073",
                 severity = Severity.ERROR,
                 version = contract.id,
-                file = file.relative,
-                null,
-                "Formats above 64 require min_format and max_format in pack.mcmeta; pack_format alone " +
+                file = file.physicalRelative,
+                line = null,
+                message = "Formats above 64 require min_format and max_format in pack.mcmeta; pack_format alone " +
                     "cannot claim ${contract.id}.",
             )
         }
+        range.overlays.forEach { overlay ->
+            if (!pack.hasOverlayDirectory(overlay.directory)) {
+                out += Finding(
+                    rule = "SM074",
+                    severity = Severity.WARNING,
+                    version = contract.id,
+                    file = file.physicalRelative,
+                    line = null,
+                    message = "pack.mcmeta declares overlay directory '${overlay.directory}', which contains no shader or metadata files in the pack.",
+                )
+            }
+        }
+        return range
     }
 
     private fun rewriteBlock(text: String, name: String, members: List<BlockMember>): String {

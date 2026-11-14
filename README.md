@@ -1,14 +1,15 @@
 # shadersmith
 
 [![build](https://github.com/SalyyS1/shadersmith/actions/workflows/build.yml/badge.svg)](https://github.com/SalyyS1/shadersmith/actions/workflows/build.yml)
+[![Release](https://img.shields.io/github/v/release/SalyyS1/shadersmith)](https://github.com/SalyyS1/shadersmith/releases)
 
 The Minecraft client does not validate a resource pack's shaders against anything. It compiles them, and if
-they compile, it runs them. A shader written for the previous version compiles fine on the next one and
-reads the wrong uniform, because the contract it was written against — which include directive, which GLSL
-version, which members a uniform block has and in what order — changed without a compile error to say so.
+they compile, it runs them. A shader written for a previous version can compile cleanly on the next release and
+read the wrong uniform, because the contract it was written against (which include directive, which GLSL
+version, which members a `std140` uniform block has and in what order) changed without raising a compile error.
 
-shadersmith holds that contract for each version, extracted from the game's own files, and checks a pack
-against it:
+`shadersmith` holds that per-version contract, extracted directly from the game's own vanilla shader files
+across 1.21.4 through 26.3, and checks or migrates a resource pack directory or `.zip` archive against it:
 
 ```
 $ shadersmith check hud-pack/ --mc 26.3-pre-1
@@ -29,75 +30,99 @@ $ shadersmith check hud-pack/ --mc 26.3-pre-1
    ...
 ```
 
-Then it rewrites what is mechanical, shows you the diff first, and tells you what still needs a person.
+Then it rewrites what is mechanical, prints a unified diff first, preserves all non-shader pack assets (for
+both directory and `.zip` inputs), and lists what still needs a human decision.
 
-## The changes it knows about
+## Vanilla Shader Contract Changes Covered
 
-Every one of these was found by reading the vanilla shader files on both sides of the change, and the
-dataset the tool ships was generated from those files rather than typed in. Where a project's source
-comment disagreed with the files, the files won.
+Every contract entry was generated directly from vanilla shader files on both sides of each version boundary:
 
 | Version | What changed | What happens if you miss it |
 |---|---|---|
-| 1.21.5 | `shaders/core/*.json` program definitions deleted; only the GLSL is read | The JSON is silently ignored. Whatever it re-pointed a render type at stops happening. Packs still ship these files today. |
-| 1.21.5 | `shaders/post/*.json` program configs deleted; a post effect names its shaders directly | Same |
-| 1.21.6 | Post effect `uniforms` becomes a map from block name to members | The list form fails to parse |
-| 1.21.9 | GLSL `#version 150` becomes `#version 330`; post passes use `minecraft:core/screenquad` | Compile error, or a pass that references a vertex shader that moved |
-| 1.21.11 | `LineWidth` leaves the `DynamicTransforms` block and becomes a vertex attribute | A block that still declares it compiles and reads past the buffer. One popular plugin's source says this happened at 1.21.9; it did not. |
+| 1.21.5 | `shaders/core/*.json` program definitions deleted; only GLSL is read | JSON is silently ignored; render-type remapping stops running |
+| 1.21.5 | `shaders/post/*.json` program configs deleted; post effects name shaders directly | Silently ignored |
+| 1.21.6 | Post effect `uniforms` becomes a map from block name to members | List form fails to parse |
+| 1.21.9 | GLSL `#version 150` becomes `#version 330`; post passes use `minecraft:core/screenquad` | Compile error or missing vertex shader reference |
+| 1.21.11 | `LineWidth` leaves `DynamicTransforms` and becomes a vertex attribute | Block compiles cleanly and reads past buffer |
 | 26.3 | `#moj_import` becomes `#include` | Preprocess failure |
-| 26.3 | Include files no longer carry `#version` | Compile failure on the second directive |
-| 26.3 | Every `in`/`out` needs `layout(location = N)` | Compile failure |
+| 26.3 | Include files no longer carry `#version` | Compile failure on second `#version` directive |
+| 26.3 | Every `in`/`out` requires `layout(location = N)` | Compile failure |
 | 26.3 | `gl_VertexID` becomes `gl_VertexIndex` | Compile failure |
-| 26.3 | `DynamicTransforms` members are **reordered**: `ModelViewMat, TextureMat, ColorModulator, ModelOffset` | Compiles clean. std140 is positional, so the shader reads `TextureMat` where it wants `ColorModulator`. Nothing in any log. |
-| 26.3 | `post_effect/transparency` removed with the Fabulous chain | Anything hooked into it stops running |
+| 26.3 | `DynamicTransforms` members reordered: `ModelViewMat, TextureMat, ColorModulator, ModelOffset` | Compiles cleanly; `std140` positional offset reads `TextureMat` as `ColorModulator` with zero log output |
+| 26.3 | `post_effect/transparency` removed with Fabulous chain | Chained hooks stop running |
 
-That last one is the reason this tool exists. Same members, different order, no error, wrong picture.
+## Diagnostic Rules Reference
 
-## Getting started
+| Rule | Severity | Description |
+|---|---|---|
+| `SM001`..`SM003` | Error / Warning | Dead pre-1.21.5 shader JSON configs and unknown `minecraft:` core/include overrides |
+| `SM010` | Info | Overriding a shared vanilla GLSL include (`last pack in stack wins`) |
+| `SM020`..`SM021` | Error | Disallowed `#version` in GLSL includes (26.3+) or mismatched GLSL `#version` |
+| `SM030`..`SM032` | Error | Wrong `#moj_import`/`#include` directive, missing `minecraft:` include, or missing custom-namespace include (`<ns:file.glsl>`) |
+| `SM040`..`SM041` | Error / Warning | Positional `layout(std140) uniform` block member mismatch against vanilla |
+| `SM050`..`SM051` | Error | Missing `layout(location = N)` or legacy `gl_VertexID` on 26.3+ |
+| `SM060`..`SM065` | Error / Warning | Removed `transparency` chain, invalid post-effect JSON schema, stale vertex shader, or missing custom post-effect `.vsh`/`.fsh` source |
+| `SM070`..`SM074` | Warning | Unparseable `pack.mcmeta`, missing format declaration, format range mismatch, or missing/empty `overlays.entries` directory |
 
-Java 21 or newer. Download `shadersmith.jar` from the releases page.
+## Getting Started
+
+Requires Java 21+. Download `shadersmith-0.2.0.jar` from [Releases](https://github.com/SalyyS1/shadersmith/releases).
 
 ```sh
-shadersmith check pack/ --mc 26.2                       # one version
-shadersmith check pack/ --mc-range 1.21.6..26.3-pre-1   # every known version in the range
-shadersmith check pack.zip --mc 26.3-pre-1 --sarif out.sarif   # for CI
-shadersmith migrate pack/ --to 26.3-pre-1               # show the diff
-shadersmith migrate pack/ --to 26.3-pre-1 --write       # apply it
-shadersmith new vignette --ns myfx --mc 26.3-pre-1 --uniform Strength:float=0.6
-shadersmith contract --mc 26.3-pre-1                    # what the tool thinks the version wants
+# Validate one version or a multi-version range (stacking active pack.mcmeta overlays per version)
+java -jar shadersmith-0.2.0.jar check pack/ --mc 26.2
+java -jar shadersmith-0.2.0.jar check pack.zip --mc-range 1.21.6..26.3-pre-1
+
+# Emit SARIF v2.1.0 or JSON for CI
+java -jar shadersmith-0.2.0.jar check pack.zip --mc 26.3-pre-1 --sarif shadersmith.sarif
+java -jar shadersmith-0.2.0.jar check pack.zip --mc 26.3-pre-1 --json > findings.json
+
+# Preview unified diff, then migrate directory or .zip to a byte-deterministic .zip with SHA-1
+java -jar shadersmith-0.2.0.jar migrate pack.zip --to 26.3-pre-1
+java -jar shadersmith-0.2.0.jar migrate pack.zip --to 26.3-pre-1 --zip pack-26.3.zip
+
+# Scaffold a 26.3+ custom post-effect with matched JSON + std140 uniform block
+java -jar shadersmith-0.2.0.jar new vignette --ns myfx --mc 26.3-pre-1 --uniform Strength:float=0.6
+
+# Inspect the extracted vanilla contract for any supported version
+java -jar shadersmith-0.2.0.jar contract --mc 26.3-pre-1
 ```
 
-Exit code 1 means the pack has errors for the version; 2 means the command could not run.
+Exit code `1` means the pack has errors for the target version; `2` means invalid arguments or unreadable input.
 
-## Checking a range
+## Overlay-Aware Multi-Version Checking (`pack.mcmeta` Overlays)
 
-`--mc-range` runs every version between the two ends and reports the window the pack is actually valid
-in, which is the honest answer to what `pack.mcmeta` should claim:
+Multi-version HUD and shader packs (such as `BetterHud` packs) rely on `overlays.entries` in `pack.mcmeta` to
+ship different shaders per format range (`formats: [63, 74]`, `{min_inclusive, max_inclusive}`, or
+`min_format`/`max_format`).
+
+When running `check --mc` or `check --mc-range`, `shadersmith` evaluates `overlays.entries` for each target
+version's `pack_format`, stacks matching overlay `assets/...` files over the base pack in declaration order,
+validates the effective shader tree (including cross-overlay include resolution), and reports diagnostics at
+their exact physical file path (`overlay_26_3/assets/...`) so IDE links and GitHub SARIF annotations point to
+the real file on disk. Rule `SM074` flags declared overlay directories that are missing or contain no files.
 
 ```
 $ shadersmith check hud-pack/ --mc-range 1.21.6..26.3-pre-1
 == hud-pack on 1.21.6: 0 error(s), 4 warning(s)
-== hud-pack on 1.21.8: 0 error(s), 4 warning(s)
-== hud-pack on 1.21.9: 0 error(s), 2 warning(s)
 == hud-pack on 1.21.10: 0 error(s), 2 warning(s)
 == hud-pack on 1.21.11: 1 error(s), 2 warning(s)
-== hud-pack on 26.1: 1 error(s), 2 warning(s)
-== hud-pack on 26.2: 1 error(s), 1 warning(s)
 == hud-pack on 26.3-pre-1: 12 error(s), 2 warning(s)
 
 Valid without errors on: 1.21.6..1.21.10
 pack.mcmeta for the widest window: min_format 63, max_format 69
 ```
 
-That pack claimed `63..88`. It works to 69, and the thing that breaks it at 75 is one line in one block. This
-is the case that pack overlays exist for, and the range check tells you where to cut them.
+## Migrating Directories and `.zip` Packs
 
-## Migrating
+`migrate` applies every deterministic mechanical rewrite: `#moj_import` to `#include`, stripping `#version`
+from includes on 26.3+, renaming `gl_VertexID` to `gl_VertexIndex`, reordering `std140` uniform blocks to
+match the target version's exact layout, and removing dead pre-1.21.5 JSON program files.
 
-`migrate` applies every fix that is the same edit a careful person would make by hand: the directive
-spelling, the `#version` in an include, the `gl_VertexID` rename, a uniform block reordered to the target
-version's layout, a file the client no longer reads. It prints a unified diff and does nothing until you
-pass `--write`; a zip has to go to `--out` because it will not be rewritten in place.
+When migrating a `.zip` archive with `--out <dir>` or `--zip <out.zip>`, `shadersmith` extracts all pack
+entries safely (with zip-slip path traversal and entry size guards), preserves binary textures, sounds, fonts,
+and models untouched, applies the shader rewrites, and (when `--zip` is given) writes a byte-reproducible
+archive with normalized timestamps and prints `resource-pack-sha1=<hex>` ready for `server.properties`.
 
 ```
 --- a/assets/minecraft/shaders/core/gui.vsh
@@ -114,19 +139,32 @@ pass `--write`; a zip has to go to `--out` because it will not be rewritten in p
  };
 ```
 
-What it does not touch is anything that needs a decision. `layout(location = N)` is the main one: the
-numbers are assigned in declaration order per direction and have to agree with the vertex format on the
-other side, and a wrong guess there is a shader that compiles and draws from the wrong attribute. Those
-stay as findings under "still needs a person", with the file and line.
+Changes that require human judgment (such as choosing `layout(location = N)` indices to match vertex formats)
+are never guessed; they remain clearly listed with file and line numbers after migration.
 
-## Scaffolding a post effect
+## GitHub Action & Code Scanning Integration
 
-26.3 added `/posteffect add <player> <id>`, which lets a server switch a screen-space effect on for one
-player with no client mod — and an always-on `minecraft:end_of_frame` hook that runs whenever the pack is
-loaded. Post effects are the one place a resource pack may introduce its own GLSL and its own uniform
-block, so this is the part of the shader pipeline that opened up rather than closed.
+Run `SalyyS1/shadersmith` in CI and upload findings directly to GitHub Security Code Scanning via SARIF v2.1.0:
 
-`new` writes an effect that loads on the target version:
+```yaml
+- name: Validate Resource Pack Shaders
+  uses: SalyyS1/shadersmith@v0.2.0
+  with:
+    pack: ./resourcepack
+    mc: '26.3-pre-1'
+    sarif: shadersmith.sarif
+
+- name: Upload SARIF to GitHub Code Scanning
+  if: always()
+  uses: github/codeql-action/upload-sarif@v3
+  with:
+    sarif_file: shadersmith.sarif
+```
+
+## Scaffolding a Post Effect (`new`)
+
+Minecraft 26.3 added `/posteffect add <player> <id>` plus the `minecraft:end_of_frame` hook, allowing servers
+to trigger custom screen-space GLSL post effects with custom `std140` uniform blocks without client mods:
 
 ```
 $ shadersmith new vignette --ns myfx --mc 26.3-pre-1 --uniform Strength:float=0.6 --uniform Tint:vec3=0.1,0,0
@@ -137,88 +175,33 @@ wrote  posteffect-commands.txt
 Trigger it in game with: /posteffect add @s myfx:vignette
 ```
 
-The definition follows the shape of vanilla's own `invert.json` for that version — one pass from
-`minecraft:main` into a swap target and a blit back — because that is the shape known to load. The uniforms
-you name on the command line are declared identically in the JSON and in the GLSL block, so the two cannot
-drift apart, and the block is named after your effect so two packs never claim the same one. `--always-on`
-also writes the `end_of_frame` hook, and warns you that the last pack in the list wins if another pack
-defines it too.
+The generated JSON pass graph and GLSL uniform block share identical member definitions and pass `shadersmith check` out of the box.
 
-What comes out passes its own `check` on the target version; that is a test.
+## Scope & Non-Goals
 
-## The contract
+- **Per-pipeline `#define` flags:** Since 1.21.5, render-pipeline `#define` flags live in client Java code rather than data assets.
+- **Full GLSL compiler:** `shadersmith` validates structural vanilla contracts (directives, version headers, `std140` block member order, post-effect wiring, overlays), not arbitrary GLSL syntax errors.
+- **Sodium / Iris / OptiFine custom pipelines:** Contracts reflect vanilla Minecraft client rendering.
 
-`contract --mc <version>` prints what the tool believes, which is also how you check the tool against the game:
+## Related Salyvn Minecraft Toolchain
 
-```
-$ shadersmith contract --mc 26.3-pre-1
-26.3-pre-1  (resource pack format 97.1)
-   glsl            #version 330
-   include         #include <minecraft:name.glsl>   (includes carry no #version)
-   core programs   63 files, GLSL only
-   post effects    blur, creeper, entity_outline, invert, spider   (schema: uniform-blocks, vertex: minecraft:core/screenquad)
-   uniform blocks  10
-      DynamicTransforms { mat4 ModelViewMat; mat4 TextureMat; vec4 ColorModulator; vec3 ModelOffset }
-      Fog { vec4 FogColor; float FogEnvironmentalStart; ... }
-      ...
-```
+- [packmigrate](https://github.com/SalyyS1/packmigrate): Migrate legacy 1.14-1.21.3 `overrides` resource packs to modern `items/*.json` item definitions (1.21.4 through 26.2).
+- [packmerge](https://github.com/SalyyS1/packmerge): Deterministic multi-plugin resource pack compiler with conflict auditing and `resource-pack-sha1` output.
+- [glyphsmith](https://github.com/SalyyS1/glyphsmith): Deterministic custom bitmap font compiler, PUA allocator, and glyph auditor.
+- [foliascan](https://github.com/SalyyS1/foliascan): JVM bytecode static analyzer for Paper-to-Folia regionized multithreading migration with SARIF v2.1.0 output.
+- [minecraftkit](https://github.com/SalyyS1/minecraftkit): MCP server giving AI coding assistants Paper/Folia API auditing, crash log diagnostics, and version-aware tooling.
 
-The dataset covers 1.21.4 through 26.3-pre-1, one row per version: legal file names under `core`,
-`include` and `post`; every `layout(std140) uniform` block with its members in order; the GLSL version; the
-include directive; whether includes carry `#version`; the post effect schema era; and the vertex shader post
-passes use. `tools/build-contract-dataset.py` regenerates it from the vanilla assets that
-[misode/mcmeta](https://github.com/misode/mcmeta) publishes per version, so adding a release is one
-command. No Mojang asset is shipped — only structural facts about them.
-
-## What it does not do
-
-- **Per-pipeline `#define` values.** Since 1.21.5 the defines the engine sets for each render pipeline live
-  in client Java, not in data, so they cannot be derived from the assets. The tool checks what a pack's
-  shader declares, not what the engine will define around it.
-- **GLSL semantics.** This is not a parser. The contract violations that actually bite are structural — a
-  directive, a version line, a member out of order — and all of them sit on a line a regular expression
-  finds. A shader that is wrong in a way only a compiler notices is still wrong.
-- **Merging two packs.** When two packs override the same vanilla include, the last one in the list wins
-  and there is no message. The tool tells you a pack does that (rule SM010) and stops there; deciding what
-  the merged file should say is not something a tool should do quietly.
-- **Sodium, Iris, OptiFine.** Sodium replaces the terrain shaders with its own and leaves the rest alone;
-  what Iris and OptiFine do to pack shaders is not something I have verified and the tool makes no claim.
-- **Effect generation for core shaders.** Since 1.21.5 there is no per-render-type targeting, so every
-  "effect" is an edit to one of a dozen shared files. That is a template, not a tool.
-- **Snapshot tracking.** The dataset has releases plus the current pre-release. A snapshot in between
-  resolves to the release before it, which will be wrong when the snapshot changed something. Pass the
-  release you mean.
-
-## Building it
+## Building from Source
 
 ```sh
-./gradlew build          # tests, then the shaded jar in build/libs
+./gradlew build --no-daemon
 ```
 
-Kotlin 2.4.10 on a Java 21 toolchain, Gradle 9.7.1, one shaded jar with Clikt and kotlinx.serialization
-inside. The test suite pins the facts each rule depends on — `LineWidth` leaving at 1.21.11 and not 1.21.9,
-the 26.3 member reorder, the directive change — so that regenerating the dataset after a release cannot
-silently change what a rule means. A fixture pack written in the shape plugins actually ship is checked on
-four versions and migrated to 26.3, and the result is checked again.
+Kotlin 2.4.10 on Java 21, Gradle 9.7.1, producing a reproducible shaded CLI JAR in `build/libs/`.
+`tools/build-contract-dataset.py` regenerates the contract dataset from [misode/mcmeta](https://github.com/misode/mcmeta) per-version vanilla metadata (shipping only structural facts, zero Mojang assets).
 
-## Credits
+## Credits & License
 
-`NOTICE` lists what the tool depends on, where each fact came from, and the projects that were read to
-understand the problem. A few worth naming:
-
-[misode/mcmeta](https://github.com/misode/mcmeta) publishes every version's assets under a tag, which is
-what makes a per-version contract possible to extract instead of remember.
-[toxicity188/BetterHud](https://github.com/toxicity188/BetterHud) ships shaders through pack overlays keyed
-to format ranges, which is the right shape and the one the range check is designed to feed.
-[JNNGL/vanilla-shaders](https://github.com/JNNGL/vanilla-shaders) is the reference collection of what core
-shaders could do up to 1.21.4. [ComunidadAylas/PackSquash](https://github.com/ComunidadAylas/PackSquash)
-parses GLSL properly and is the right thing to run after this.
-[seailz/shader-devtools](https://github.com/seailz/shader-devtools) inspects pipelines from inside a running
-client, which is the only place the per-pipeline defines can be seen.
-
-shadersmith is an independent project and is not affiliated with, endorsed by or sponsored by Mojang or
-Microsoft.
-
-## Licence
+See `NOTICE` for upstream references ([misode/mcmeta](https://github.com/misode/mcmeta), [toxicity188/BetterHud](https://github.com/toxicity188/BetterHud), [JNNGL/vanilla-shaders](https://github.com/JNNGL/vanilla-shaders), [ComunidadAylas/PackSquash](https://github.com/ComunidadAylas/PackSquash), [seailz/shader-devtools](https://github.com/seailz/shader-devtools)). Independent project; not affiliated with Mojang or Microsoft.
 
 Apache-2.0. See `LICENSE`.
