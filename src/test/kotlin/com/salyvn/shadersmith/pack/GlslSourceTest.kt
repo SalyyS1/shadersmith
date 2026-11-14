@@ -53,4 +53,29 @@ class GlslSourceTest {
         assertEquals(listOf("InSampler", "Sky"), source.samplers)
         assertEquals(listOf(3), source.vertexIdLines)
     }
+
+    @Test
+    fun `line and block comments do not trigger false directives blocks samplers or gl_VertexID`() {
+        val source = GlslSource(
+            """
+            // #version 150
+            /* multi-line comment
+               #moj_import <minecraft:fog.glsl>
+               layout(std140) uniform DynamicTransforms { float Fake; };
+               uniform sampler2D GhostSampler;
+               int bad = gl_VertexID;
+            */
+            #version 330
+            flat in int vertexIndex;
+            void main() {}
+            """.trimIndent(),
+        )
+
+        assertEquals(330 to 8, source.version)
+        assertEquals(emptyList<IncludeDirective>(), source.includes)
+        assertEquals(emptyList<DeclaredBlock>(), source.blocks)
+        assertEquals(emptyList<String>(), source.samplers)
+        assertEquals(emptyList<Int>(), source.vertexIdLines)
+        assertEquals(listOf("flat in int vertexIndex;" to 9), source.unqualifiedInterfaceVariables)
+    }
 }

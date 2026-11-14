@@ -1,5 +1,5 @@
 name: 'ShaderSmith Resource Pack Shader Contract Check'
-description: 'Validate or migrate Minecraft resource pack GLSL shaders and post effects against vanilla shader contracts (1.21.4 through 26.3) with SARIF output.'
+description: 'Validate or migrate Minecraft resource pack GLSL shaders and post effects against vanilla shader contracts (1.21.4 through 26.3) with OASIS SARIF v2.1.0 output.'
 author: 'SalyyS1'
 
 branding:
@@ -11,25 +11,41 @@ inputs:
     description: 'Path to the resource pack directory or .zip archive'
     required: true
   mc:
-    description: 'Target Minecraft version (e.g. 26.3-pre-1). Mutually exclusive with mc-range.'
+    description: 'Target Minecraft version (e.g. 26.3). Mutually exclusive with mc-range.'
     required: false
     default: ''
   mc-range:
-    description: 'Minecraft version range (e.g. 1.21.6..26.3-pre-1). Mutually exclusive with mc.'
+    description: 'Minecraft version range (e.g. 1.21.6..26.3). Mutually exclusive with mc.'
     required: false
     default: ''
   sarif:
-    description: 'Optional output path for SARIF v2.1.0 report (for GitHub Code Scanning)'
+    description: 'Optional output path for OASIS SARIF v2.1.0 report (for GitHub Code Scanning)'
     required: false
     default: ''
   json:
     description: 'Optional output path for JSON findings report'
     required: false
     default: ''
+  strict:
+    description: 'Treat warnings as errors (true/false)'
+    required: false
+    default: 'false'
+  fail-on-error:
+    description: 'Exit non-zero when shader contract findings fail validation (true/false)'
+    required: false
+    default: 'true'
   version:
     description: 'ShaderSmith release tag to download'
     required: false
-    default: 'v0.2.0'
+    default: 'v0.3.0'
+
+outputs:
+  sarif-file:
+    description: 'Path to the generated SARIF v2.1.0 report file, if requested'
+    value: ${{ steps.check.outputs.sarif-file }}
+  exit-code:
+    description: 'Exit code returned by shadersmith check (0 = clean, 1 = findings)'
+    value: ${{ steps.check.outputs.exit-code }}
 
 runs:
   using: 'composite'
@@ -52,6 +68,7 @@ runs:
         curl -fsSL "${JAR_URL}" -o "${RUNNER_TEMP}/shadersmith/shadersmith.jar"
 
     - name: Run ShaderSmith Check
+      id: check
       shell: bash
       env:
         INPUT_PACK: ${{ inputs.pack }}
@@ -59,6 +76,8 @@ runs:
         INPUT_MC_RANGE: ${{ inputs.mc-range }}
         INPUT_SARIF: ${{ inputs.sarif }}
         INPUT_JSON: ${{ inputs.json }}
+        INPUT_STRICT: ${{ inputs.strict }}
+        INPUT_FAIL_ON_ERROR: ${{ inputs.fail-on-error }}
       run: |
         set -euo pipefail
         ARGS=("check" "${INPUT_PACK}")
@@ -70,11 +89,26 @@ runs:
           echo "::error::Either 'mc' or 'mc-range' input must be set."
           exit 2
         fi
+        if [ "${INPUT_STRICT}" = "true" ]; then
+          ARGS+=("--strict")
+        fi
         if [ -n "${INPUT_SARIF}" ]; then
           ARGS+=("--sarif" "${INPUT_SARIF}")
+          echo "sarif-file=${INPUT_SARIF}" >> "${GITHUB_OUTPUT}"
         fi
+        set +e
         if [ -n "${INPUT_JSON}" ]; then
           java -jar "${RUNNER_TEMP}/shadersmith/shadersmith.jar" "${ARGS[@]}" --json > "${INPUT_JSON}"
+          CODE=$?
         else
           java -jar "${RUNNER_TEMP}/shadersmith/shadersmith.jar" "${ARGS[@]}"
+          CODE=$?
+        fi
+        set -e
+        echo "exit-code=${CODE}" >> "${GITHUB_OUTPUT}"
+        if [ "${CODE}" -eq 2 ]; then
+          exit 2
+        fi
+        if [ "${CODE}" -ne 0 ] && [ "${INPUT_FAIL_ON_ERROR}" = "true" ]; then
+          exit "${CODE}"
         fi

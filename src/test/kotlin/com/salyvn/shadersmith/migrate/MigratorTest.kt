@@ -200,4 +200,33 @@ class MigratorTest {
             PackSource.extractAllSafely(evilZip, target)
         }
     }
+
+    @Test
+    fun `migrating a stale post effect vertex_shader rewrites screenquad path for 26_3`() {
+        val packDir = directory.resolve("stale-post-pack")
+        Files.createDirectories(packDir.resolve("assets/myfx/post_effect"))
+        Files.writeString(
+            packDir.resolve("pack.mcmeta"),
+            """{ "pack": { "min_format": 63, "max_format": 97 } }""",
+        )
+        Files.writeString(
+            packDir.resolve("assets/myfx/post_effect/fade.json"),
+            """
+            {
+              "targets": { "swap": {} },
+              "passes": [
+                {
+                  "vertex_shader": "minecraft:post/screenquad",
+                  "fragment_shader": "minecraft:post/blit",
+                  "inputs": [{ "sampler_name": "In", "target": "minecraft:main" }],
+                  "output": "minecraft:main"
+                }
+              ]
+            }
+            """.trimIndent(),
+        )
+        val result = Migrator(dataset.resolve("26.3")).migrate(PackSource.read(packDir))
+        val rewritten = result.changes.single().after!!
+        assertTrue(rewritten.contains("\"vertex_shader\": \"minecraft:core/screenquad\""), rewritten)
+    }
 }

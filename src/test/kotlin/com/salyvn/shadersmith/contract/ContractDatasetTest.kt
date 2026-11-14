@@ -81,6 +81,19 @@ class ContractDatasetTest {
         assertEquals("26.2", dataset.resolve("88").id)
         assertEquals("26.2", dataset.resolve("90").id, "a snapshot between releases resolves to the release before it")
         assertEquals("1.21.9", dataset.resolve("69").id)
+        assertEquals("26.3", dataset.resolve("97").id)
+        assertEquals("26.3", dataset.resolve("97.1").id)
+        assertEquals("26.3", dataset.resolve("26.3").id)
+        assertEquals("26.3-pre-1", dataset.resolve("26.3-pre-1").id)
+    }
+
+    @Test
+    fun `a release range skips intermediate prereleases unless explicitly requested`() {
+        val releaseRange = dataset.range(dataset.resolve("26.1"), dataset.resolve("26.3"))
+        assertEquals(listOf("26.1", "26.2", "26.3"), releaseRange.map { it.id })
+
+        val preRange = dataset.range(dataset.resolve("26.2"), dataset.resolve("26.3-pre-1"))
+        assertEquals(listOf("26.2", "26.3-pre-1"), preRange.map { it.id })
     }
 
     @Test

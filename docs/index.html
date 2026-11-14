@@ -1,0 +1,1494 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>shadersmith v0.3.0 | Minecraft GLSL, Overlay &amp; Post-Effect Contract Auditor</title>
+  <meta name="description" content="Zero-upload browser GLSL shader contract auditor, pack.mcmeta overlay resolver, std140 byte-offset inspector, and 26.3 migrator for Minecraft 1.21.4 through 26.3.">
+  <style>
+    :root {
+      --bg: #0b0f17;
+      --panel: #121826;
+      --panel-alt: #182132;
+      --border: #263248;
+      --text: #e6edf3;
+      --muted: #93a1b5;
+      --accent: #7aa2f7;
+      --accent-hover: #8fb3ff;
+      --err: #f7768e;
+      --err-bg: rgba(247, 118, 142, 0.12);
+      --warn: #e0af68;
+      --warn-bg: rgba(224, 175, 104, 0.12);
+      --ok: #9ece6a;
+      --ok-bg: rgba(158, 206, 106, 0.12);
+      --note: #7dcfff;
+      --note-bg: rgba(125, 207, 255, 0.12);
+      --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+      --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font-family: var(--sans);
+      line-height: 1.5;
+    }
+    a { color: var(--accent); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    .wrap {
+      max-width: 1260px;
+      margin: 0 auto;
+      padding: 24px 20px 56px;
+    }
+    header {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 16px;
+      padding-bottom: 20px;
+      border-bottom: 1px solid var(--border);
+      margin-bottom: 20px;
+    }
+    h1 {
+      margin: 0 0 6px;
+      font-size: 1.65rem;
+      letter-spacing: -0.02em;
+      font-family: var(--mono);
+    }
+    .tag {
+      display: inline-block;
+      font-size: 0.78rem;
+      padding: 2px 8px;
+      border-radius: 4px;
+      background: var(--panel-alt);
+      border: 1px solid var(--border);
+      color: var(--accent);
+      vertical-align: middle;
+      margin-left: 8px;
+    }
+    .subtitle {
+      margin: 0;
+      color: var(--muted);
+      max-width: 780px;
+      font-size: 0.95rem;
+    }
+    .nav-links {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+    .btn {
+      background: var(--panel-alt);
+      color: var(--text);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 7px 13px;
+      font-size: 0.85rem;
+      font-family: var(--sans);
+      cursor: pointer;
+      transition: border-color 0.15s, background 0.15s;
+    }
+    .btn:hover { border-color: var(--accent); }
+    .btn-primary {
+      background: #1f3a6d;
+      border-color: #3b63ac;
+      color: #fff;
+      font-weight: 600;
+    }
+    .btn-primary:hover { background: #284987; }
+    .toolbar {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      align-items: center;
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 12px 14px;
+      margin-bottom: 16px;
+    }
+    .toolbar label {
+      font-size: 0.82rem;
+      color: var(--muted);
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    select, input[type="text"] {
+      background: var(--bg);
+      color: var(--text);
+      border: 1px solid var(--border);
+      border-radius: 5px;
+      padding: 6px 9px;
+      font-family: var(--mono);
+      font-size: 0.83rem;
+    }
+    .dropzone {
+      border: 1px dashed #3d5175;
+      border-radius: 8px;
+      padding: 14px 18px;
+      background: rgba(24, 33, 50, 0.55);
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 18px;
+    }
+    .dropzone.dragover {
+      border-color: var(--accent);
+      background: rgba(122, 162, 247, 0.1);
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: 300px 1fr;
+      gap: 16px;
+      margin-bottom: 20px;
+    }
+    @media (max-width: 900px) {
+      .grid { grid-template-columns: 1fr; }
+    }
+    .card {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      overflow: hidden;
+    }
+    .card-head {
+      padding: 10px 14px;
+      background: var(--panel-alt);
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-size: 0.85rem;
+      font-weight: 600;
+    }
+    .file-list {
+      list-style: none;
+      margin: 0;
+      padding: 6px;
+      max-height: 410px;
+      overflow-y: auto;
+    }
+    .file-item {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 6px;
+      padding: 6px 8px;
+      border-radius: 5px;
+      font-family: var(--mono);
+      font-size: 0.78rem;
+      cursor: pointer;
+      color: var(--muted);
+      word-break: break-all;
+    }
+    .file-item:hover { background: rgba(255, 255, 255, 0.04); color: var(--text); }
+    .file-item.active { background: #1e2d4a; color: #fff; }
+    .file-del {
+      background: transparent;
+      border: none;
+      color: var(--muted);
+      cursor: pointer;
+      font-family: var(--mono);
+      padding: 0 4px;
+    }
+    .file-del:hover { color: var(--err); }
+    textarea.code-editor {
+      width: 100%;
+      min-height: 360px;
+      background: #090d14;
+      color: var(--text);
+      border: none;
+      padding: 12px 14px;
+      font-family: var(--mono);
+      font-size: 0.82rem;
+      line-height: 1.45;
+      resize: vertical;
+      outline: none;
+    }
+    .matrix-strip {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      padding: 12px 14px;
+      border-bottom: 1px solid var(--border);
+    }
+    .ver-pill {
+      font-family: var(--mono);
+      font-size: 0.77rem;
+      padding: 4px 9px;
+      border-radius: 4px;
+      border: 1px solid var(--border);
+      cursor: pointer;
+    }
+    .ver-pill.ok { background: var(--ok-bg); border-color: rgba(158, 206, 106, 0.4); color: var(--ok); }
+    .ver-pill.warn { background: var(--warn-bg); border-color: rgba(224, 175, 104, 0.4); color: var(--warn); }
+    .ver-pill.err { background: var(--err-bg); border-color: rgba(247, 118, 142, 0.4); color: var(--err); }
+    .findings-list {
+      padding: 12px 14px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .finding {
+      padding: 10px 12px;
+      border-radius: 6px;
+      border-left: 3px solid var(--border);
+      background: rgba(255, 255, 255, 0.02);
+      font-size: 0.85rem;
+    }
+    .finding.error { border-left-color: var(--err); background: var(--err-bg); }
+    .finding.warning { border-left-color: var(--warn); background: var(--warn-bg); }
+    .finding.note { border-left-color: var(--note); background: var(--note-bg); }
+    .finding-meta {
+      font-family: var(--mono);
+      font-size: 0.78rem;
+      margin-bottom: 4px;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      align-items: center;
+    }
+    .rule-badge {
+      padding: 1px 6px;
+      border-radius: 3px;
+      background: rgba(0, 0, 0, 0.35);
+      font-weight: 700;
+    }
+    .fix-hint {
+      margin-top: 5px;
+      font-family: var(--mono);
+      font-size: 0.77rem;
+      color: var(--ok);
+    }
+    .std140-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 14px;
+      padding: 14px;
+    }
+    @media (max-width: 820px) {
+      .std140-grid { grid-template-columns: 1fr; }
+    }
+    table.byte-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-family: var(--mono);
+      font-size: 0.78rem;
+    }
+    table.byte-table th, table.byte-table td {
+      border: 1px solid var(--border);
+      padding: 6px 8px;
+      text-align: left;
+    }
+    table.byte-table th { background: var(--panel-alt); color: var(--muted); }
+    tr.drift { background: var(--err-bg); }
+    footer {
+      margin-top: 32px;
+      padding-top: 16px;
+      border-top: 1px solid var(--border);
+      color: var(--muted);
+      font-size: 0.82rem;
+      display: flex;
+      justify-content: space-between;
+      flex-wrap: wrap;
+      gap: 10px;
+    }
+  </style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div>
+      <h1>shadersmith <span class="tag">v0.3.0</span></h1>
+      <p class="subtitle">
+        Zero-upload client-side Minecraft GLSL shader contract auditor, <code>pack.mcmeta</code> overlay stack resolver,
+        <code>std140</code> uniform byte-offset explorer, and 26.3 mechanical migrator (1.21.4 through 26.3).
+      </p>
+    </div>
+    <div class="nav-links">
+      <a class="btn" href="https://github.com/SalyyS1/shadersmith">GitHub Repository</a>
+      <a class="btn" href="https://github.com/SalyyS1/shadersmith/releases">Download CLI JAR</a>
+    </div>
+  </header>
+
+  <div class="dropzone" id="dropzone">
+    <div>
+      <strong>Drop a resource pack <code>.zip</code> here</strong> or load a sample preset.
+      <div style="color: var(--muted); font-size: 0.81rem;">
+        Runs 100% locally in your browser via <code>DecompressionStream</code>; zero files leave your machine.
+      </div>
+    </div>
+    <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+      <label class="btn" style="cursor: pointer; margin: 0;">
+        Open .zip Pack
+        <input type="file" id="zipInput" accept=".zip" style="display: none;">
+      </label>
+      <button class="btn" id="presetLegacyBtn" type="button">Preset: 1.21.10 HUD Pack on 26.3</button>
+      <button class="btn" id="presetOverlayBtn" type="button">Preset: Dual-Era Overlay Pack</button>
+      <button class="btn" id="presetPostFxBtn" type="button">Preset: Broken 26.3 Post-Effect</button>
+    </div>
+  </div>
+
+  <div class="toolbar">
+    <label>
+      Target Version
+      <select id="versionSelect"></select>
+    </label>
+    <label>
+      <input type="checkbox" id="rangeCheck" checked>
+      Evaluate full release matrix (1.21.4 .. 26.3)
+    </label>
+    <button class="btn btn-primary" id="runCheckBtn" type="button">Audit Pack</button>
+    <button class="btn" id="migrateBtn" type="button">Apply Mechanical Migration</button>
+    <button class="btn" id="exportSarifBtn" type="button">Export SARIF v2.1.0</button>
+    <button class="btn" id="exportJsonBtn" type="button">Export JSON</button>
+  </div>
+
+  <div class="grid">
+    <div class="card">
+      <div class="card-head">
+        <span>Pack Files (<span id="fileCount">0</span>)</span>
+        <button class="btn" id="addFileBtn" type="button" style="padding: 3px 8px; font-size: 0.76rem;">+ File</button>
+      </div>
+      <ul class="file-list" id="fileList"></ul>
+    </div>
+
+    <div class="card">
+      <div class="card-head">
+        <span id="activeFileLabel" style="font-family: var(--mono);">pack.mcmeta</span>
+        <span id="migrationNotice" style="color: var(--ok); font-size: 0.78rem;"></span>
+      </div>
+      <textarea class="code-editor" id="codeEditor" spellcheck="false"></textarea>
+    </div>
+  </div>
+
+  <div class="card" style="margin-bottom: 20px;">
+    <div class="card-head">
+      <span id="summaryHeader">Contract Findings</span>
+      <span id="windowBadge" style="font-family: var(--mono); font-size: 0.78rem; color: var(--muted);"></span>
+    </div>
+    <div class="matrix-strip" id="matrixStrip"></div>
+    <div class="findings-list" id="findingsList"></div>
+  </div>
+
+  <div class="card">
+    <div class="card-head">
+      <span>Vanilla <code>std140</code> Uniform Block Byte-Offset Diff Explorer</span>
+      <div style="display: flex; gap: 8px; align-items: center;">
+        <select id="blockCompareFrom"></select>
+        <span style="color: var(--muted);">vs</span>
+        <select id="blockCompareTo"></select>
+        <select id="blockSelect"></select>
+      </div>
+    </div>
+    <div class="std140-grid" id="std140Grid"></div>
+  </div>
+
+  <footer>
+    <span>Apache-2.0 License | Built by <a href="https://github.com/SalyyS1">SalyyS1</a></span>
+    <span>CLI &amp; GitHub Action: <code>uses: SalyyS1/shadersmith@v0.3.0</code></span>
+  </footer>
+</div>
+
+<script src="contracts.js"></script>
+<script>
+(function () {
+  "use strict";
+
+  const DATASET = window.SHADERSMITH_CONTRACTS;
+  const VERSIONS = DATASET.versions;
+  const BY_ID = Object.fromEntries(VERSIONS.map(v => [v.id, v]));
+
+  const RULE_META = {
+    SM001: ["ObsoleteCoreProgramJson", "Obsolete pre-1.21.5 shaders/core/*.json program definition", "warning"],
+    SM002: ["ObsoletePostProgramJson", "Obsolete pre-1.21.5 shaders/post/*.json program config", "warning"],
+    SM010: ["OverridesVanillaInclude", "Pack overrides a shared vanilla GLSL include file", "note"],
+    SM011: ["UnknownVanillaShaderOverride", "Shader under assets/minecraft/shaders has no matching vanilla entry", "warning"],
+    SM020: ["IncludeDeclaresVersion", "GLSL include file declares #version where forbidden (26.3+)", "error"],
+    SM021: ["MissingGlslVersion", "Main GLSL shader is missing a #version directive", "error"],
+    SM022: ["MismatchedGlslVersion", "GLSL #version differs from target Minecraft dialect", "warning"],
+    SM030: ["WrongIncludeDirective", "GLSL include directive (#moj_import vs #include) does not match target version", "error"],
+    SM031: ["MissingVanillaInclude", "GLSL shader includes a non-existent minecraft: include file", "error"],
+    SM032: ["MissingCustomInclude", "GLSL shader includes a custom-namespaced file missing from the pack", "error"],
+    SM033: ["CircularIncludeChain", "Circular GLSL #include / #moj_import dependency chain", "error"],
+    SM040: ["UniformBlockMemberOrderMismatch", "Positional std140 uniform block members are out of order", "error"],
+    SM041: ["UniformBlockSchemaMismatch", "Positional std140 uniform block members differ from vanilla contract", "error"],
+    SM050: ["MissingInterfaceLayoutLocation", "File-scope in/out variable lacks explicit layout(location = N) on 26.3+", "error"],
+    SM051: ["LegacyGlVertexId", "Shader uses legacy gl_VertexID instead of gl_VertexIndex on 26.3+", "error"],
+    SM060: ["LegacyPostEffectProgramPass", "Post-effect pass uses pre-1.21.5 program key instead of direct shaders", "error"],
+    SM061: ["LegacyPostEffectUniformList", "Post-effect pass uses 1.21.5 list uniforms instead of uniform-block map", "error"],
+    SM062: ["StalePostPassVertexShader", "Post-effect pass references a missing or outdated vanilla vertex shader", "warning"],
+    SM063: ["RemovedTransparencyPostChain", "Post-effect targets minecraft:transparency removed in 26.3", "warning"],
+    SM064: ["MissingPostPassShaderFile", "Post-effect pass references a missing vertex or fragment shader", "error"],
+    SM065: ["InvalidPostEffectTargetGraph", "Post-effect pass references an undeclared or unwritten internal render target", "error"],
+    SM066: ["PostPassSamplerMismatch", "Post-effect pass inputs and shader uniform sampler declarations disagree", "error"],
+    SM067: ["PostPassUniformBlockMismatch", "Post-effect pass uniform block values disagree with shader std140 layout", "error"],
+    SM068: ["MalformedPostEffectJson", "Post-effect JSON file cannot be parsed", "error"],
+    SM070: ["UnreadablePackMcmeta", "pack.mcmeta is unreadable or lacks a pack object", "error"],
+    SM071: ["MissingPackFormat", "pack.mcmeta declares no pack format", "error"],
+    SM072: ["PackFormatRangeMismatch", "Target Minecraft pack format falls outside pack.mcmeta declared range", "warning"],
+    SM073: ["MissingMinMaxFormat", "Pack targeting format > 64 lacks min_format and max_format", "error"],
+    SM074: ["EmptyOrMissingOverlayDirectory", "pack.mcmeta overlay entry points to a missing or empty directory", "warning"],
+    SM075: ["InvalidPackMcmetaOverlayOrRange", "pack.mcmeta contains inverted format bounds or invalid overlay directory name", "error"]
+  };
+
+  let packFiles = {};
+  let currentFile = "";
+  let lastFindings = [];
+
+  const PRESETS = {
+    legacy: {
+      target: "26.3",
+      files: {
+        "pack.mcmeta": JSON.stringify({
+          pack: { description: "HUD Shaders", pack_format: 63, supported_formats: [63, 88], min_format: 63, max_format: 88 }
+        }, null, 2) + "\n",
+        "assets/minecraft/shaders/core/gui.vsh": [
+          "#version 330",
+          "",
+          "layout(std140) uniform DynamicTransforms {",
+          "    mat4 ModelViewMat;",
+          "    vec4 ColorModulator;",
+          "    vec3 ModelOffset;",
+          "    mat4 TextureMat;",
+          "    float LineWidth;",
+          "};",
+          "",
+          "layout(std140) uniform Projection {",
+          "    mat4 ProjMat;",
+          "};",
+          "",
+          "in vec3 Position;",
+          "in vec4 Color;",
+          "out vec4 vertexColor;",
+          "",
+          "void main() {",
+          "    gl_Position = ProjMat * ModelViewMat * vec4(Position, 1.0);",
+          "    vertexColor = Color;",
+          "    if (gl_VertexID == 0) vertexColor.a = 0.0;",
+          "}"
+        ].join("\n") + "\n",
+        "assets/minecraft/shaders/core/text.fsh": [
+          "#version 330",
+          "#moj_import <minecraft:fog.glsl>",
+          "uniform sampler2D Sampler0;",
+          "in vec4 vertexColor;",
+          "in vec2 texCoord0;",
+          "out vec4 fragColor;",
+          "void main() {",
+          "    fragColor = texture(Sampler0, texCoord0) * vertexColor;",
+          "}"
+        ].join("\n") + "\n",
+        "assets/minecraft/shaders/include/fog.glsl": [
+          "#version 330",
+          "layout(std140) uniform Fog {",
+          "    vec4 FogColor;",
+          "    float FogEnvironmentalStart;",
+          "    float FogEnvironmentalEnd;",
+          "    float FogRenderDistanceStart;",
+          "    float FogRenderDistanceEnd;",
+          "    float FogSkyEnd;",
+          "    float FogCloudsEnd;",
+          "};"
+        ].join("\n") + "\n",
+        "assets/minecraft/shaders/core/rendertype_text.json": "{\n  \"vertex\": \"minecraft:core/rendertype_text\"\n}\n",
+        "assets/minecraft/post_effect/transparency.json": "{ \"targets\": {}, \"passes\": [] }\n"
+      }
+    },
+    overlay: {
+      target: "26.3",
+      files: {
+        "pack.mcmeta": JSON.stringify({
+          pack: {
+            description: "Multi-version HUD pack",
+            pack_format: 63,
+            supported_formats: [63, 64],
+            min_format: [63, 0],
+            max_format: [97, 1]
+          },
+          overlays: {
+            entries: [
+              { directory: "overlay_1_21_9", min_format: 69, max_format: 88 },
+              { directory: "overlay_26_3", min_format: 97, max_format: 99 }
+            ]
+          }
+        }, null, 2) + "\n",
+        "assets/myhud/shaders/include/hud_math.glsl": "vec2 snapPixel(vec2 uv) { return floor(uv * 256.0) / 256.0; }\n",
+        "assets/minecraft/shaders/core/gui.vsh": [
+          "#version 150",
+          "#moj_import <myhud:hud_math.glsl>",
+          "in vec3 Position;",
+          "out vec2 uv;",
+          "void main() { uv = snapPixel(Position.xy); gl_Position = vec4(Position, 1.0); }"
+        ].join("\n") + "\n",
+        "overlay_1_21_9/assets/minecraft/shaders/core/gui.vsh": [
+          "#version 330",
+          "#moj_import <myhud:hud_math.glsl>",
+          "in vec3 Position;",
+          "out vec2 uv;",
+          "void main() { uv = snapPixel(Position.xy); gl_Position = vec4(Position, 1.0); }"
+        ].join("\n") + "\n",
+        "overlay_26_3/assets/minecraft/shaders/core/gui.vsh": [
+          "#version 330",
+          "#include <myhud:hud_math.glsl>",
+          "layout(std140) uniform DynamicTransforms {",
+          "    mat4 ModelViewMat;",
+          "    mat4 TextureMat;",
+          "    vec4 ColorModulator;",
+          "    vec3 ModelOffset;",
+          "};",
+          "layout(location = 0) in vec3 Position;",
+          "layout(location = 0) out vec2 uv;",
+          "void main() { uv = snapPixel(Position.xy); gl_Position = ModelViewMat * vec4(Position, 1.0); }"
+        ].join("\n") + "\n"
+      }
+    },
+    postfx: {
+      target: "26.3",
+      files: {
+        "pack.mcmeta": JSON.stringify({
+          pack: { description: "Broken 26.3 Post Effect", min_format: [97, 0], max_format: [97, 1] }
+        }, null, 2) + "\n",
+        "assets/myfx/shaders/include/a.glsl": "#include <myfx:b.glsl>\nfloat a() { return 1.0; }\n",
+        "assets/myfx/shaders/include/b.glsl": "#include <myfx:a.glsl>\nfloat b() { return 2.0; }\n",
+        "assets/myfx/shaders/post/vignette.fsh": [
+          "#version 330",
+          "#include <myfx:a.glsl>",
+          "uniform sampler2D InSampler;",
+          "uniform sampler2D MaskSampler;",
+          "layout(location = 0) in vec2 texCoord;",
+          "layout(std140) uniform VignetteConfig {",
+          "    vec3 Tint;",
+          "    float Strength;",
+          "};",
+          "layout(location = 0) out vec4 fragColor;",
+          "void main() {",
+          "    fragColor = texture(InSampler, texCoord) * texture(MaskSampler, texCoord) * vec4(Tint, Strength);",
+          "}"
+        ].join("\n") + "\n",
+        "assets/myfx/post_effect/vignette.json": JSON.stringify({
+          targets: { swap: {} },
+          passes: [
+            {
+              vertex_shader: "minecraft:post/screenquad",
+              fragment_shader: "myfx:post/vignette",
+              inputs: [
+                { sampler_name: "In", target: "swap" }
+              ],
+              output: "missing_target",
+              uniforms: {
+                VignetteConfig: [
+                  { name: "Strength", type: "float", value: 0.6 },
+                  { name: "Tint", type: "vec3", value: [1.0, 0.2, 0.2] }
+                ]
+              }
+            }
+          ]
+        }, null, 2) + "\n"
+      }
+    }
+  };
+
+  function stripCommentsPreservingLines(input) {
+    let out = "";
+    let i = 0;
+    const n = input.length;
+    while (i < n) {
+      const c = input[i];
+      if (c === "/" && i + 1 < n && input[i + 1] === "/") {
+        out += "  ";
+        i += 2;
+        while (i < n && input[i] !== "\n") { out += " "; i++; }
+      } else if (c === "/" && i + 1 < n && input[i + 1] === "*") {
+        out += "  ";
+        i += 2;
+        while (i < n) {
+          if (input[i] === "*" && i + 1 < n && input[i + 1] === "/") {
+            out += "  ";
+            i += 2;
+            break;
+          }
+          out += input[i] === "\n" ? "\n" : " ";
+          i++;
+        }
+      } else {
+        out += c;
+        i++;
+      }
+    }
+    return out;
+  }
+
+  function parseGlsl(text) {
+    const rawLines = text.split(/\r?\n/);
+    const cleanText = stripCommentsPreservingLines(text);
+    const cleanLines = cleanText.split(/\r?\n/);
+
+    let version = null;
+    const includes = [];
+    const bareIo = [];
+    const vertexIdLines = [];
+
+    cleanLines.forEach((line, idx) => {
+      if (!version) {
+        const vm = line.match(/^\s*#version\s+(\d+)/);
+        if (vm) version = { value: parseInt(vm[1], 10), line: idx + 1 };
+      }
+      const im = line.match(/^\s*#(moj_import|include)\s*[<"]([^>"]+)[>"]/);
+      if (im) includes.push({ directive: im[1], target: im[2], line: idx + 1 });
+      if (/^(?:(?:flat|smooth|noperspective|centroid)\s+)*(in|out)\s+\w+\s+\w+\s*;$/.test(line.trim())) {
+        bareIo.push({ decl: rawLines[idx].trim(), line: idx + 1 });
+      }
+      if (/\bgl_VertexID\b/.test(line)) vertexIdLines.push(idx + 1);
+    });
+
+    const blocks = [];
+    const blockRe = /layout\s*\(\s*std140\s*\)\s*uniform\s+(\w+)\s*\{([^}]*)\}/g;
+    let bm;
+    while ((bm = blockRe.exec(cleanText)) !== null) {
+      const lineNum = cleanText.slice(0, bm.index).split("\n").length;
+      const members = [];
+      bm[2].split(/\r?\n/).forEach(l => {
+        const mm = l.match(/^\s*(\w+)\s+(\w+)\s*;/);
+        if (mm) members.push({ type: mm[1], name: mm[2] });
+      });
+      blocks.push({ name: bm[1], members, line: lineNum });
+    }
+
+    const samplers = [];
+    const sampRe = /uniform\s+sampler\w*\s+(\w+)\s*;/g;
+    let sm;
+    while ((sm = sampRe.exec(cleanText)) !== null) samplers.push(sm[1]);
+
+    return { text, rawLines, version, includes, blocks, bareIo, vertexIdLines, samplers };
+  }
+
+  function majorFormat(val) {
+    if (typeof val === "number" && Number.isInteger(val)) return val;
+    if (Array.isArray(val) && typeof val[0] === "number") return Math.trunc(val[0]);
+    return null;
+  }
+
+  function parseRangeField(val) {
+    if (Array.isArray(val) && typeof val[0] === "number" && typeof val[1] === "number") return [val[0], val[1]];
+    if (val && typeof val === "object" && typeof val.min_inclusive === "number" && typeof val.max_inclusive === "number") {
+      return [val.min_inclusive, val.max_inclusive];
+    }
+    return null;
+  }
+
+  function parsePackMeta(text) {
+    let root;
+    try { root = JSON.parse(text); } catch (_) { return null; }
+    if (!root || typeof root.pack !== "object" || Array.isArray(root.pack)) return null;
+    const p = root.pack;
+    const min = majorFormat(p.min_format);
+    const max = majorFormat(p.max_format);
+    const pf = typeof p.pack_format === "number" ? p.pack_format : null;
+    const sf = parseRangeField(p.supported_formats);
+    const overlays = [];
+    if (root.overlays && Array.isArray(root.overlays.entries)) {
+      root.overlays.entries.forEach(e => {
+        if (!e || typeof e !== "object" || typeof e.directory !== "string") return;
+        const rawDir = e.directory.trim();
+        if (!rawDir) return;
+        const dir = rawDir.replace(/^\/+|\/+$/g, "") || rawDir;
+        const omin = majorFormat(e.min_format);
+        const omax = majorFormat(e.max_format);
+        let r = (omin !== null && omax !== null) ? [omin, omax] : parseRangeField(e.formats);
+        if (!r) {
+          const single = majorFormat(e.formats);
+          if (single !== null) r = [single, single];
+        }
+        if (r) overlays.push({ directory: dir, rawDirectory: rawDir, min: r[0], max: r[1] });
+      });
+    }
+    return {
+      min, max, packFormat: pf, supportedFormats: sf,
+      effectiveMin: min ?? (sf ? sf[0] : pf),
+      effectiveMax: max ?? (sf ? sf[1] : pf),
+      overlays
+    };
+  }
+
+  function classifyFile(logicalPath) {
+    const nsMatch = logicalPath.match(/^assets\/([a-z0-9_.-]+)\/.+/);
+    const shMatch = logicalPath.match(/^assets\/([a-z0-9_.-]+)\/shaders\/(core|include|post)\/(.+)$/);
+    const peMatch = /^assets\/[a-z0-9_.-]+\/post_effect\/[^/]+\.json$/.test(logicalPath);
+    const fileName = logicalPath.slice(logicalPath.lastIndexOf("/") + 1);
+    const ext = fileName.includes(".") ? fileName.slice(fileName.lastIndexOf(".") + 1) : "";
+    const shaderDir = shMatch ? shMatch[2] : null;
+    return {
+      namespace: nsMatch ? nsMatch[1] : null,
+      shaderDirectory: shaderDir,
+      fileName,
+      isPostEffect: peMatch,
+      isShaderSource: shaderDir !== null && (ext === "vsh" || ext === "fsh" || ext === "glsl"),
+      isGlslInclude: shaderDir === "include"
+    };
+  }
+
+  function checkPackAgainstContract(filesMap, contract) {
+    const findings = [];
+    const allPaths = Object.keys(filesMap).sort();
+    let parsedMeta = null;
+
+    if (filesMap["pack.mcmeta"] !== undefined) {
+      parsedMeta = parsePackMeta(filesMap["pack.mcmeta"]);
+      if (!parsedMeta) {
+        findings.push({ rule: "SM070", severity: "error", version: contract.id, file: "pack.mcmeta", line: null, message: "pack.mcmeta is not readable JSON with a \"pack\" section." });
+      } else if (parsedMeta.effectiveMin === null || parsedMeta.effectiveMax === null) {
+        findings.push({ rule: "SM071", severity: "error", version: contract.id, file: "pack.mcmeta", line: null, message: "pack.mcmeta declares no pack format at all." });
+      } else {
+        if (parsedMeta.effectiveMin > parsedMeta.effectiveMax) {
+          findings.push({ rule: "SM075", severity: "error", version: contract.id, file: "pack.mcmeta", line: null, message: `pack.mcmeta declares inverted format range ${parsedMeta.effectiveMin}..${parsedMeta.effectiveMax}.` });
+        } else if (contract.packFormat < parsedMeta.effectiveMin || contract.packFormat > parsedMeta.effectiveMax) {
+          findings.push({ rule: "SM072", severity: "warning", version: contract.id, file: "pack.mcmeta", line: null, message: `pack.mcmeta claims formats ${parsedMeta.effectiveMin}..${parsedMeta.effectiveMax}, and ${contract.id} is format ${contract.packFormat}.` });
+        }
+        if (contract.packFormat > 64 && parsedMeta.min === null) {
+          findings.push({ rule: "SM073", severity: "error", version: contract.id, file: "pack.mcmeta", line: null, message: `Formats above 64 require min_format and max_format in pack.mcmeta; pack_format alone cannot claim ${contract.id}.` });
+        }
+        parsedMeta.overlays.forEach(ov => {
+          if (!/^[a-zA-Z0-9_-]+$/.test(ov.rawDirectory)) {
+            findings.push({ rule: "SM075", severity: "error", version: contract.id, file: "pack.mcmeta", line: null, message: `pack.mcmeta overlay directory '${ov.rawDirectory}' violates [a-zA-Z0-9_-]+.` });
+          } else if (ov.min > ov.max) {
+            findings.push({ rule: "SM075", severity: "error", version: contract.id, file: "pack.mcmeta", line: null, message: `pack.mcmeta overlay '${ov.directory}' declares inverted format range ${ov.min}..${ov.max}.` });
+          } else if (!allPaths.some(p => p.startsWith(ov.directory + "/"))) {
+            findings.push({ rule: "SM074", severity: "warning", version: contract.id, file: "pack.mcmeta", line: null, message: `pack.mcmeta declares overlay directory '${ov.directory}', which contains no files in the pack.` });
+          }
+        });
+      }
+    }
+
+    const merged = new Map();
+    allPaths.filter(p => p.startsWith("assets/")).forEach(p => {
+      merged.set(p, { relative: p, physical: p, text: filesMap[p], ...classifyFile(p) });
+    });
+    if (parsedMeta) {
+      parsedMeta.overlays.filter(o => o.min <= o.max && contract.packFormat >= o.min && contract.packFormat <= o.max).forEach(ov => {
+        const prefix = ov.directory + "/";
+        allPaths.filter(p => p.startsWith(prefix + "assets/")).forEach(p => {
+          const logical = p.slice(prefix.length);
+          merged.set(logical, { relative: logical, physical: p, text: filesMap[p], ...classifyFile(logical) });
+        });
+      });
+    }
+
+    const effective = Array.from(merged.values()).sort((a, b) => a.relative.localeCompare(b.relative));
+    const effectivePaths = new Set(effective.map(f => f.relative));
+    const glslByPath = new Map();
+    effective.filter(f => f.isShaderSource).forEach(f => glslByPath.set(f.relative, parseGlsl(f.text)));
+
+    function resolveInclude(fromLogical, target) {
+      if (target.includes(":")) {
+        const [ns, rel] = target.split(":", 2);
+        const c = `assets/${ns}/shaders/include/${rel}`;
+        return glslByPath.has(c) ? c : null;
+      }
+      const sib = `${fromLogical.slice(0, fromLogical.lastIndexOf("/"))}/${target}`;
+      if (glslByPath.has(sib)) return sib;
+      const mc = `assets/minecraft/shaders/include/${target}`;
+      return glslByPath.has(mc) ? mc : null;
+    }
+
+    // SM033 cycle detection
+    const perm = new Set();
+    const seenCycles = new Set();
+    const stack = [];
+    function dfs(curr) {
+      const fileObj = merged.get(curr);
+      const src = glslByPath.get(curr);
+      if (!fileObj || !src) return;
+      stack.push(curr);
+      for (const inc of src.includes) {
+        const next = resolveInclude(curr, inc.target);
+        if (!next) continue;
+        const idx = stack.indexOf(next);
+        if (idx >= 0) {
+          const nodes = stack.slice(idx);
+          const sig = [...nodes].sort().join("|");
+          if (!seenCycles.has(sig)) {
+            seenCycles.add(sig);
+            findings.push({
+              rule: "SM033", severity: "error", version: contract.id, file: fileObj.physical, line: inc.line,
+              message: `Circular GLSL include chain detected: ${[...nodes, next].join(" -> ")}.`
+            });
+          }
+        } else if (!perm.has(next)) {
+          dfs(next);
+        }
+      }
+      stack.pop();
+      perm.add(curr);
+    }
+    effective.filter(f => f.isShaderSource).forEach(f => { if (!perm.has(f.relative)) dfs(f.relative); });
+
+    const coreSet = new Set(contract.coreFiles);
+    const incSet = new Set(contract.includeFiles);
+    const postSet = new Set(contract.postPrograms);
+
+    effective.forEach(file => {
+      if (file.shaderDirectory === "core" && file.fileName.endsWith(".json")) {
+        if (!contract.coreProgramJson) {
+          findings.push({ rule: "SM001", severity: "warning", version: contract.id, file: file.physical, line: null, message: `Program definitions under shaders/core were removed in 1.21.5; ignored on ${contract.id}.`, fixDesc: "delete dead core program JSON" });
+        }
+        return;
+      }
+      if (file.shaderDirectory === "post" && file.fileName.endsWith(".json")) {
+        if (contract.postEffectSchema !== "program-ref" && contract.postEffectSchema !== "legacy-shaders-post") {
+          findings.push({ rule: "SM002", severity: "warning", version: contract.id, file: file.physical, line: null, message: `Post program configs under shaders/post were removed in 1.21.5; ignored on ${contract.id}.`, fixDesc: "delete dead post program JSON" });
+        }
+        return;
+      }
+      if (file.isShaderSource) {
+        const src = glslByPath.get(file.relative);
+        if (file.namespace === "minecraft") {
+          const known = file.shaderDirectory === "core" ? coreSet : file.shaderDirectory === "include" ? incSet : postSet;
+          if (known.has(file.fileName)) {
+            if (file.isGlslInclude) {
+              findings.push({ rule: "SM010", severity: "note", version: contract.id, file: file.physical, line: null, message: "Replaces a shared vanilla GLSL include file." });
+            }
+          } else {
+            findings.push({ rule: "SM011", severity: "warning", version: contract.id, file: file.physical, line: null, message: `No ${file.shaderDirectory}/${file.fileName} in vanilla ${contract.id}.` });
+          }
+        }
+        if (file.isGlslInclude) {
+          if (src.version && !contract.includesCarryVersion) {
+            findings.push({ rule: "SM020", severity: "error", version: contract.id, file: file.physical, line: src.version.line, message: `An include must not declare #version on ${contract.id}.`, fixDesc: `delete line ${src.version.line}` });
+          }
+        } else if (contract.glslVersion) {
+          if (!src.version) {
+            findings.push({ rule: "SM021", severity: "error", version: contract.id, file: file.physical, line: 1, message: `No #version line. Vanilla ${contract.id} uses #version ${contract.glslVersion}.` });
+          } else if (src.version.value !== contract.glslVersion) {
+            findings.push({ rule: "SM022", severity: "warning", version: contract.id, file: file.physical, line: src.version.line, message: `#version ${src.version.value} where vanilla ${contract.id} uses #version ${contract.glslVersion}.`, fixDesc: `#version ${contract.glslVersion}` });
+          }
+        }
+        if (contract.includeDirective) {
+          src.includes.forEach(inc => {
+            if (inc.directive !== contract.includeDirective) {
+              findings.push({ rule: "SM030", severity: "error", version: contract.id, file: file.physical, line: inc.line, message: `#${inc.directive} must be #${contract.includeDirective} on ${contract.id}.`, fixDesc: `#${contract.includeDirective} <${inc.target}>` });
+            }
+            const t = inc.target.includes(":") ? inc.target.split(":", 2)[1] : inc.target;
+            if (inc.target.startsWith("minecraft:") || !inc.target.includes(":")) {
+              const sib = `${file.relative.slice(0, file.relative.lastIndexOf("/"))}/${t}`;
+              if (!incSet.has(t) && !effectivePaths.has(`assets/minecraft/shaders/include/${t}`) && !effectivePaths.has(sib)) {
+                findings.push({ rule: "SM031", severity: "error", version: contract.id, file: file.physical, line: inc.line, message: `Includes '${inc.target}', which vanilla ${contract.id} does not have.` });
+              }
+            } else {
+              const ns = inc.target.split(":", 2)[0];
+              const exp = `assets/${ns}/shaders/include/${t}`;
+              if (!effectivePaths.has(exp)) {
+                findings.push({ rule: "SM032", severity: "error", version: contract.id, file: file.physical, line: inc.line, message: `Includes '${inc.target}', but '${exp}' is missing from the pack.` });
+              }
+            }
+          });
+        }
+        src.blocks.forEach(blk => {
+          const exp = contract.uniformBlocks[blk.name];
+          if (!exp) return;
+          const same = blk.members.length === exp.length && blk.members.every((m, i) => m.type === exp[i].type && m.name === exp[i].name);
+          if (!same) {
+            const setA = blk.members.map(m => `${m.type}:${m.name}`).sort().join(",");
+            const setB = exp.map(m => `${m.type}:${m.name}`).sort().join(",");
+            const sameSet = setA === setB;
+            findings.push({
+              rule: sameSet ? "SM040" : "SM041",
+              severity: "error",
+              version: contract.id,
+              file: file.physical,
+              line: blk.line,
+              message: `Uniform block ${blk.name} does not match vanilla ${contract.id} std140 layout. Declared: [${blk.members.map(m => m.type + " " + m.name).join(", ")}]; expected: [${exp.map(m => m.type + " " + m.name).join(", ")}].`,
+              fixDesc: `rewrite ${blk.name} to ${contract.id} layout`
+            });
+          }
+        });
+        if (contract.includeDirective === "include" && !file.isGlslInclude) {
+          src.bareIo.forEach(io => {
+            findings.push({ rule: "SM050", severity: "error", version: contract.id, file: file.physical, line: io.line, message: `'${io.decl}' lacks explicit layout(location = N) required on ${contract.id}.` });
+          });
+        }
+        if (contract.includeDirective === "include") {
+          src.vertexIdLines.forEach(ln => {
+            findings.push({ rule: "SM051", severity: "error", version: contract.id, file: file.physical, line: ln, message: `gl_VertexID was renamed to gl_VertexIndex on ${contract.id}.`, fixDesc: "rename gl_VertexID -> gl_VertexIndex" });
+          });
+        }
+      } else if (file.isPostEffect) {
+        const peId = file.fileName.replace(/\.json$/, "");
+        if (peId === "transparency" && file.namespace === "minecraft" && !contract.postEffects.includes("transparency")) {
+          findings.push({ rule: "SM063", severity: "warning", version: contract.id, file: file.physical, line: null, message: "minecraft:transparency was removed in 26.3.", fixDesc: "delete removed transparency hook" });
+        }
+        let root;
+        try { root = JSON.parse(file.text); } catch (e) {
+          findings.push({ rule: "SM068", severity: "error", version: contract.id, file: file.physical, line: null, message: `Post effect JSON syntax error: ${e.message}` });
+          return;
+        }
+        const passes = Array.isArray(root.passes) ? root.passes : null;
+        if (passes && contract.postEffectSchema !== "program-ref" && passes.some(p => p && typeof p === "object" && "program" in p)) {
+          findings.push({ rule: "SM060", severity: "error", version: contract.id, file: file.physical, line: null, message: `Pass uses pre-1.21.5 "program" key instead of vertex_shader and fragment_shader.` });
+        }
+        if (passes && contract.postEffectSchema === "uniform-blocks" && passes.some(p => p && Array.isArray(p.uniforms))) {
+          findings.push({ rule: "SM061", severity: "error", version: contract.id, file: file.physical, line: null, message: `"uniforms" is a list (1.21.5 shape) instead of a uniform-block map.` });
+        }
+        if (!passes || contract.postEffectSchema === "program-ref" || contract.postEffectSchema === "legacy-shaders-post") return;
+
+        const targets = root.targets && typeof root.targets === "object" ? new Set(Object.keys(root.targets)) : new Set();
+        const extTargets = Array.isArray(root.external_targets) ? new Set(root.external_targets) : new Set();
+        const written = new Set();
+
+        function collectGlsl(rootLogical) {
+          const samplers = new Set();
+          const blocks = {};
+          const vis = new Set();
+          function walk(p) {
+            if (vis.has(p) || !glslByPath.has(p)) return;
+            vis.add(p);
+            const g = glslByPath.get(p);
+            g.samplers.forEach(s => samplers.add(s));
+            g.blocks.forEach(b => { blocks[b.name] = b.members; });
+            g.includes.forEach(inc => { const nxt = resolveInclude(p, inc.target); if (nxt) walk(nxt); });
+          }
+          walk(rootLogical);
+          return { samplers, blocks };
+        }
+
+        passes.forEach((pass, idx) => {
+          if (!pass || typeof pass !== "object") return;
+          const label = `Pass #${idx + 1}`;
+          const vsh = typeof pass.vertex_shader === "string" ? pass.vertex_shader : null;
+          const fsh = typeof pass.fragment_shader === "string" ? pass.fragment_shader : null;
+          let vshLogical = null;
+          let fshLogical = null;
+
+          if (vsh && vsh.includes(":")) {
+            const [ns, rel] = vsh.split(":", 2);
+            vshLogical = `assets/${ns}/shaders/${rel}.vsh`;
+            if (ns === "minecraft") {
+              const inVan = vsh === contract.postPassVertexShader ||
+                (rel.startsWith("core/") && coreSet.has(rel.slice(5) + ".vsh")) ||
+                (rel.startsWith("post/") && postSet.has(rel.slice(5) + ".vsh"));
+              if (!inVan && !effectivePaths.has(vshLogical)) {
+                findings.push({ rule: "SM062", severity: "warning", version: contract.id, file: file.physical, line: null, message: `${label} vertex_shader '${vsh}' is stale on ${contract.id}; expected '${contract.postPassVertexShader}'.`, fixDesc: `rewrite to ${contract.postPassVertexShader}` });
+              }
+            } else if (!effectivePaths.has(vshLogical)) {
+              findings.push({ rule: "SM064", severity: "error", version: contract.id, file: file.physical, line: null, message: `${label} references missing '${vshLogical}'.` });
+            }
+          }
+          if (fsh && fsh.includes(":")) {
+            const [ns, rel] = fsh.split(":", 2);
+            fshLogical = `assets/${ns}/shaders/${rel}.fsh`;
+            if (ns === "minecraft") {
+              const inVan = (rel.startsWith("core/") && coreSet.has(rel.slice(5) + ".fsh")) ||
+                (rel.startsWith("post/") && postSet.has(rel.slice(5) + ".fsh"));
+              if (!inVan && !effectivePaths.has(fshLogical)) {
+                findings.push({ rule: "SM064", severity: "error", version: contract.id, file: file.physical, line: null, message: `${label} references missing vanilla fragment_shader '${fsh}'.` });
+              }
+            } else if (!effectivePaths.has(fshLogical)) {
+              findings.push({ rule: "SM064", severity: "error", version: contract.id, file: file.physical, line: null, message: `${label} references missing '${fshLogical}'.` });
+            }
+          }
+
+          const boundSamplers = [];
+          if (Array.isArray(pass.inputs)) {
+            pass.inputs.forEach(inp => {
+              if (!inp || typeof inp !== "object") return;
+              if (typeof inp.sampler_name === "string") boundSamplers.push(inp.sampler_name);
+              if (typeof inp.target === "string" && !inp.target.includes(":") && !extTargets.has(inp.target)) {
+                if (!targets.has(inp.target)) {
+                  findings.push({ rule: "SM065", severity: "error", version: contract.id, file: file.physical, line: null, message: `${label} reads undeclared internal target '${inp.target}'.` });
+                } else if (!written.has(inp.target)) {
+                  findings.push({ rule: "SM065", severity: "warning", version: contract.id, file: file.physical, line: null, message: `${label} reads internal target '${inp.target}' before any earlier pass writes to it.` });
+                }
+              }
+            });
+          }
+          if (typeof pass.output === "string" && !pass.output.includes(":") && !extTargets.has(pass.output)) {
+            if (!targets.has(pass.output)) {
+              findings.push({ rule: "SM065", severity: "error", version: contract.id, file: file.physical, line: null, message: `${label} writes to undeclared internal target '${pass.output}'.` });
+            } else {
+              written.add(pass.output);
+            }
+          }
+
+          const fshInfo = fshLogical && glslByPath.has(fshLogical) ? collectGlsl(fshLogical) : null;
+          const vshInfo = vshLogical && glslByPath.has(vshLogical) ? collectGlsl(vshLogical) : null;
+          const stdQuad = ["minecraft:core/screenquad", "minecraft:post/screenquad", "minecraft:post/blit"].includes(vsh) && !vshInfo;
+
+          if (fshInfo && fsh) {
+            const boundNames = new Set(boundSamplers.flatMap(s => [s + "Sampler", s]));
+            fshInfo.samplers.forEach(s => {
+              if (!boundNames.has(s)) {
+                findings.push({ rule: "SM066", severity: "error", version: contract.id, file: file.physical, line: null, message: `${label} fragment_shader '${fsh}' declares 'uniform sampler ${s}', but inputs do not bind sampler_name '${s.replace(/Sampler$/, "")}'.` });
+              }
+            });
+            if (vshInfo || stdQuad) {
+              const allS = new Set([...fshInfo.samplers, ...(vshInfo ? vshInfo.samplers : [])]);
+              boundSamplers.forEach(b => {
+                if (!allS.has(b + "Sampler") && !allS.has(b)) {
+                  findings.push({ rule: "SM066", severity: "warning", version: contract.id, file: file.physical, line: null, message: `${label} binds unused sampler_name '${b}' (${b}Sampler).` });
+                }
+              });
+            }
+          }
+
+          if (contract.postEffectSchema === "uniform-blocks" && pass.uniforms && typeof pass.uniforms === "object" && !Array.isArray(pass.uniforms)) {
+            const knownBlocks = { ...contract.uniformBlocks, ...(vshInfo ? vshInfo.blocks : {}), ...(fshInfo ? fshInfo.blocks : {}) };
+            Object.entries(pass.uniforms).forEach(([bName, arr]) => {
+              if (!Array.isArray(arr)) return;
+              const jMem = arr.filter(x => x && x.name && x.type).map(x => ({ type: x.type, name: x.name }));
+              const sMem = knownBlocks[bName];
+              if (sMem) {
+                const ok = jMem.length === sMem.length && jMem.every((m, i) => m.type === sMem[i].type && m.name === sMem[i].name);
+                if (!ok) {
+                  findings.push({
+                    rule: "SM067", severity: "error", version: contract.id, file: file.physical, line: null,
+                    message: `${label} uniform block '${bName}' [${jMem.map(m => m.type + " " + m.name).join(", ")}] disagrees with GLSL std140 layout [${sMem.map(m => m.type + " " + m.name).join(", ")}].`
+                  });
+                }
+              } else if (fshInfo && (vshInfo || stdQuad)) {
+                findings.push({ rule: "SM067", severity: "warning", version: contract.id, file: file.physical, line: null, message: `${label} supplies uniform block '${bName}' not declared in '${fsh}'.` });
+              }
+            });
+          }
+        });
+      }
+    });
+
+    const sevRank = { error: 0, warning: 1, note: 2 };
+    return findings.sort((a, b) => (sevRank[a.severity] - sevRank[b.severity]) || a.file.localeCompare(b.file) || ((a.line || 0) - (b.line || 0)));
+  }
+
+  function applyMechanicalMigration(contract) {
+    let changedCount = 0;
+    const nextFiles = { ...packFiles };
+    Object.keys(nextFiles).forEach(path => {
+      const info = classifyFile(path.replace(/^[^/]+\/(?=assets\/)/, ""));
+      let text = nextFiles[path];
+      if ((info.shaderDirectory === "core" && info.fileName.endsWith(".json") && !contract.coreProgramJson) ||
+          (info.shaderDirectory === "post" && info.fileName.endsWith(".json") && contract.postEffectSchema !== "program-ref") ||
+          (info.isPostEffect && info.namespace === "minecraft" && info.fileName === "transparency.json" && !contract.postEffects.includes("transparency"))) {
+        delete nextFiles[path];
+        changedCount++;
+        return;
+      }
+      if (info.isShaderSource) {
+        const before = text;
+        let lines = text.split(/\r?\n/);
+        const glsl = parseGlsl(text);
+        if (info.isGlslInclude && glsl.version && !contract.includesCarryVersion) {
+          lines.splice(glsl.version.line - 1, 1);
+        } else if (!info.isGlslInclude && glsl.version && contract.glslVersion && glsl.version.value !== contract.glslVersion) {
+          lines[glsl.version.line - 1] = `#version ${contract.glslVersion}`;
+        }
+        text = lines.join("\n");
+        if (contract.includeDirective) {
+          text = text.replace(/^(\s*)#(moj_import|include)(\s*[<"][^>"]+[>"])/gm, `$1#${contract.includeDirective}$3`);
+        }
+        if (contract.includeDirective === "include") {
+          text = text.replace(/\bgl_VertexID\b/g, "gl_VertexIndex");
+        }
+        Object.entries(contract.uniformBlocks).forEach(([bName, members]) => {
+          const re = new RegExp(`(layout\\s*\\(\\s*std140\\s*\\)\\s*uniform\\s+${bName}\\s*\\{)[^}]*(\\})`, "g");
+          const body = "\n" + members.map(m => `    ${m.type} ${m.name};`).join("\n") + "\n";
+          text = text.replace(re, `$1${body}$2`);
+        });
+        if (text !== before) {
+          nextFiles[path] = text;
+          changedCount++;
+        }
+      } else if (info.isPostEffect) {
+        const before = text;
+        text = text.replace(/("vertex_shader"\s*:\s*")(minecraft:post\/screenquad|minecraft:post\/blit)(")/g, `$1${contract.postPassVertexShader}$3`);
+        if (text !== before) {
+          nextFiles[path] = text;
+          changedCount++;
+        }
+      }
+    });
+    packFiles = nextFiles;
+    if (!packFiles[currentFile]) currentFile = Object.keys(packFiles)[0] || "";
+    renderFileList();
+    syncEditorFromCurrent();
+    document.getElementById("migrationNotice").textContent = changedCount > 0
+      ? `Migrated ${changedCount} file(s) for ${contract.id}`
+      : `No mechanical changes needed for ${contract.id}`;
+    runAudit();
+  }
+
+  // Client-side ZIP reader via Central Directory + DecompressionStream('deflate-raw')
+  async function readZipPack(file) {
+    const buf = await file.arrayBuffer();
+    const bytes = new Uint8Array(buf);
+    const view = new DataView(buf);
+    let eocd = -1;
+    for (let i = bytes.length - 22; i >= Math.max(0, bytes.length - 65557); i--) {
+      if (view.getUint32(i, true) === 0x06054b50) { eocd = i; break; }
+    }
+    if (eocd < 0) throw new Error("Not a valid .zip archive");
+    const totalEntries = view.getUint16(eocd + 10, true);
+    let cdOffset = view.getUint32(eocd + 16, true);
+    const dec = new TextDecoder("utf-8");
+    const extracted = {};
+    const validExts = new Set(["vsh", "fsh", "glsl", "json", "mcmeta"]);
+
+    for (let e = 0; e < totalEntries; e++) {
+      if (view.getUint32(cdOffset, true) !== 0x02014b50) break;
+      const method = view.getUint16(cdOffset + 10, true);
+      const compSize = view.getUint32(cdOffset + 20, true);
+      const nameLen = view.getUint16(cdOffset + 28, true);
+      const extraLen = view.getUint16(cdOffset + 30, true);
+      const commentLen = view.getUint16(cdOffset + 32, true);
+      const lfhOffset = view.getUint32(cdOffset + 42, true);
+      const rawName = dec.decode(bytes.subarray(cdOffset + 46, cdOffset + 46 + nameLen)).replace(/\\/g, "/").replace(/^\/+/, "");
+      cdOffset += 46 + nameLen + extraLen + commentLen;
+
+      if (!rawName || rawName.endsWith("/")) continue;
+      const ext = rawName.includes(".") ? rawName.slice(rawName.lastIndexOf(".") + 1).toLowerCase() : "";
+      if (!validExts.has(ext)) continue;
+
+      const lfhNameLen = view.getUint16(lfhOffset + 26, true);
+      const lfhExtraLen = view.getUint16(lfhOffset + 28, true);
+      const dataStart = lfhOffset + 30 + lfhNameLen + lfhExtraLen;
+      const slice = bytes.subarray(dataStart, dataStart + compSize);
+
+      if (method === 0) {
+        extracted[rawName] = dec.decode(slice);
+      } else if (method === 8) {
+        const ds = new DecompressionStream("deflate-raw");
+        const writer = ds.writable.getWriter();
+        writer.write(slice);
+        writer.close();
+        const outBuf = await new Response(ds.readable).arrayBuffer();
+        extracted[rawName] = dec.decode(outBuf);
+      }
+    }
+    return extracted;
+  }
+
+  // std140 byte layout calculator
+  const STD140_LAYOUT = {
+    float: [4, 4], int: [4, 4], uint: [4, 4], bool: [4, 4],
+    vec2: [8, 8], ivec2: [8, 8], uvec2: [8, 8],
+    vec3: [16, 12], ivec3: [16, 12], uvec3: [16, 12],
+    vec4: [16, 16], ivec4: [16, 16], uvec4: [16, 16],
+    mat4: [16, 64]
+  };
+
+  function computeStd140(members) {
+    let offset = 0;
+    return (members || []).map(m => {
+      const [align, size] = STD140_LAYOUT[m.type] || [16, 16];
+      offset = Math.ceil(offset / align) * align;
+      const row = { type: m.type, name: m.name, offset, end: offset + size, size };
+      offset += size;
+      return row;
+    });
+  }
+
+  function renderStd140Diff() {
+    const vFrom = BY_ID[document.getElementById("blockCompareFrom").value];
+    const vTo = BY_ID[document.getElementById("blockCompareTo").value];
+    const bName = document.getElementById("blockSelect").value;
+    const rowsA = computeStd140(vFrom.uniformBlocks[bName]);
+    const rowsB = computeStd140(vTo.uniformBlocks[bName]);
+    const grid = document.getElementById("std140Grid");
+
+    function renderSide(ver, rows, otherRows) {
+      if (!rows.length) {
+        return `<div><div style="margin-bottom:6px;font-weight:600;">${ver.id} (format ${ver.packFormat})</div><div style="color:var(--muted);font-size:0.82rem;">Block <code>${bName}</code> is not declared on ${ver.id}.</div></div>`;
+      }
+      const trs = rows.map(r => {
+        const match = otherRows.find(o => o.name === r.name && o.type === r.type && o.offset === r.offset);
+        const cls = match ? "" : " class=\"drift\"";
+        return `<tr${cls}><td><code>[${r.offset}..${r.end})</code></td><td><code>${r.type}</code></td><td><code>${r.name}</code></td></tr>`;
+      }).join("");
+      return `<div>
+        <div style="margin-bottom:6px;font-weight:600;font-family:var(--mono);">${ver.id} (format ${ver.packFormat}${ver.packFormatMinor ? "." + ver.packFormatMinor : ""})</div>
+        <table class="byte-table"><thead><tr><th>std140 Bytes</th><th>Type</th><th>Member</th></tr></thead><tbody>${trs}</tbody></table>
+      </div>`;
+    }
+    grid.innerHTML = renderSide(vFrom, rowsA, rowsB) + renderSide(vTo, rowsB, rowsA);
+  }
+
+  function renderFileList() {
+    const ul = document.getElementById("fileList");
+    const keys = Object.keys(packFiles).sort();
+    document.getElementById("fileCount").textContent = String(keys.length);
+    ul.innerHTML = "";
+    keys.forEach(k => {
+      const li = document.createElement("li");
+      li.className = "file-item" + (k === currentFile ? " active" : "");
+      const span = document.createElement("span");
+      span.textContent = k;
+      span.onclick = () => {
+        saveEditorToCurrent();
+        currentFile = k;
+        renderFileList();
+        syncEditorFromCurrent();
+      };
+      const del = document.createElement("button");
+      del.className = "file-del";
+      del.textContent = "x";
+      del.title = "Remove file";
+      del.onclick = ev => {
+        ev.stopPropagation();
+        delete packFiles[k];
+        if (currentFile === k) currentFile = Object.keys(packFiles)[0] || "";
+        renderFileList();
+        syncEditorFromCurrent();
+        runAudit();
+      };
+      li.appendChild(span);
+      li.appendChild(del);
+      ul.appendChild(li);
+    });
+  }
+
+  function syncEditorFromCurrent() {
+    document.getElementById("activeFileLabel").textContent = currentFile || "(no file selected)";
+    document.getElementById("codeEditor").value = currentFile ? (packFiles[currentFile] ?? "") : "";
+  }
+
+  function saveEditorToCurrent() {
+    if (currentFile && packFiles[currentFile] !== undefined) {
+      packFiles[currentFile] = document.getElementById("codeEditor").value;
+    }
+  }
+
+  function escapeHtml(s) {
+    return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  }
+
+  function runAudit() {
+    saveEditorToCurrent();
+    const selectedVer = BY_ID[document.getElementById("versionSelect").value];
+    const matrixOn = document.getElementById("rangeCheck").checked;
+    const strip = document.getElementById("matrixStrip");
+    const windowBadge = document.getElementById("windowBadge");
+
+    if (matrixOn) {
+      strip.style.display = "flex";
+      strip.innerHTML = "";
+      const releaseVers = VERSIONS.filter(v => !v.id.includes("-"));
+      const cleanVers = [];
+      releaseVers.forEach(v => {
+        const vf = checkPackAgainstContract(packFiles, v);
+        const errs = vf.filter(x => x.severity === "error").length;
+        const warns = vf.filter(x => x.severity === "warning").length;
+        if (errs === 0) cleanVers.push(v);
+        const pill = document.createElement("span");
+        pill.className = "ver-pill " + (errs > 0 ? "err" : warns > 0 ? "warn" : "ok");
+        pill.textContent = `${v.id}: ${errs}E/${warns}W`;
+        pill.onclick = () => {
+          document.getElementById("versionSelect").value = v.id;
+          runAudit();
+        };
+        strip.appendChild(pill);
+      });
+      windowBadge.textContent = cleanVers.length
+        ? `Error-free releases: ${cleanVers[0].id}..${cleanVers[cleanVers.length - 1].id} (formats ${cleanVers[0].packFormat}..${cleanVers[cleanVers.length - 1].packFormat})`
+        : "Errors present on every release checked";
+    } else {
+      strip.style.display = "none";
+      windowBadge.textContent = "";
+    }
+
+    lastFindings = checkPackAgainstContract(packFiles, selectedVer);
+    const errs = lastFindings.filter(f => f.severity === "error").length;
+    const warns = lastFindings.filter(f => f.severity === "warning").length;
+    document.getElementById("summaryHeader").textContent =
+      `Findings on ${selectedVer.id} (format ${selectedVer.packFormat}${selectedVer.packFormatMinor ? "." + selectedVer.packFormatMinor : ""}): ${errs} error(s), ${warns} warning(s)`;
+
+    const container = document.getElementById("findingsList");
+    if (lastFindings.length === 0) {
+      container.innerHTML = `<div class="finding" style="border-left-color:var(--ok);background:var(--ok-bg);color:var(--ok);">No contract violations found on ${escapeHtml(selectedVer.id)}.</div>`;
+      return;
+    }
+    container.innerHTML = lastFindings.map(f => {
+      const loc = f.line ? `${f.file}:${f.line}` : f.file;
+      const fixHtml = f.fixDesc ? `<div class="fix-hint">fix: ${escapeHtml(f.fixDesc)}</div>` : "";
+      return `<div class="finding ${f.severity}">
+        <div class="finding-meta">
+          <span class="rule-badge">${escapeHtml(f.rule)}</span>
+          <span>${escapeHtml(f.severity.toUpperCase())}</span>
+          <a href="#" data-jump="${escapeHtml(f.file)}" style="font-family:var(--mono);">${escapeHtml(loc)}</a>
+        </div>
+        <div>${escapeHtml(f.message)}</div>
+        ${fixHtml}
+      </div>`;
+    }).join("");
+
+    container.querySelectorAll("[data-jump]").forEach(a => {
+      a.onclick = ev => {
+        ev.preventDefault();
+        const target = a.getAttribute("data-jump");
+        if (packFiles[target] !== undefined) {
+          saveEditorToCurrent();
+          currentFile = target;
+          renderFileList();
+          syncEditorFromCurrent();
+        }
+      };
+    });
+  }
+
+  function buildSarif(findings) {
+    const ruleIds = [...new Set(findings.map(f => f.rule))].sort();
+    return {
+      $schema: "https://json.schemastore.org/sarif-2.1.0.json",
+      version: "2.1.0",
+      runs: [{
+        tool: {
+          driver: {
+            name: "shadersmith",
+            version: "0.3.0",
+            informationUri: "https://github.com/SalyyS1/shadersmith",
+            rules: ruleIds.map(id => {
+              const m = RULE_META[id] || [id, `ShaderSmith diagnostic ${id}`, "warning"];
+              return {
+                id,
+                name: m[0],
+                shortDescription: { text: m[1] },
+                defaultConfiguration: { level: m[2] },
+                helpUri: "https://github.com/SalyyS1/shadersmith#diagnostic-rules-reference"
+              };
+            })
+          }
+        },
+        results: findings.map(f => {
+          const loc = { artifactLocation: { uri: f.file, uriBaseId: "%SRCROOT%" } };
+          if (f.line) loc.region = { startLine: f.line };
+          return {
+            ruleId: f.rule,
+            level: f.severity,
+            message: { text: `[${f.version}] ${f.message}` },
+            locations: [{ physicalLocation: loc }],
+            partialFingerprints: { primaryLocationLineHash: `${f.rule}:${f.version}:${f.file}:${f.line || 0}` },
+            properties: { minecraftVersion: f.version, fixable: Boolean(f.fixDesc) }
+          };
+        })
+      }]
+    };
+  }
+
+  function downloadText(filename, content) {
+    const blob = new Blob([content], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  function loadPreset(key) {
+    const p = PRESETS[key];
+    packFiles = { ...p.files };
+    currentFile = Object.keys(packFiles)[0] || "";
+    document.getElementById("versionSelect").value = p.target;
+    document.getElementById("migrationNotice").textContent = "";
+    renderFileList();
+    syncEditorFromCurrent();
+    runAudit();
+  }
+
+  // Initialize UI selects and event handlers
+  const verSel = document.getElementById("versionSelect");
+  const fromSel = document.getElementById("blockCompareFrom");
+  const toSel = document.getElementById("blockCompareTo");
+  VERSIONS.forEach(v => {
+    const label = `${v.id} (format ${v.packFormat}${v.packFormatMinor ? "." + v.packFormatMinor : ""})`;
+    verSel.add(new Option(label, v.id));
+    fromSel.add(new Option(v.id, v.id));
+    toSel.add(new Option(v.id, v.id));
+  });
+  verSel.value = "26.3";
+  fromSel.value = "26.2";
+  toSel.value = "26.3";
+
+  const allBlockNames = [...new Set(VERSIONS.flatMap(v => Object.keys(v.uniformBlocks)))].sort();
+  const blkSel = document.getElementById("blockSelect");
+  allBlockNames.forEach(b => blkSel.add(new Option(b, b)));
+  blkSel.value = "DynamicTransforms";
+
+  [fromSel, toSel, blkSel].forEach(el => el.addEventListener("change", renderStd140Diff));
+  verSel.addEventListener("change", runAudit);
+  document.getElementById("rangeCheck").addEventListener("change", runAudit);
+  document.getElementById("runCheckBtn").addEventListener("click", runAudit);
+  document.getElementById("migrateBtn").addEventListener("click", () => {
+    saveEditorToCurrent();
+    applyMechanicalMigration(BY_ID[verSel.value]);
+  });
+  document.getElementById("codeEditor").addEventListener("input", () => {
+    saveEditorToCurrent();
+  });
+  document.getElementById("addFileBtn").addEventListener("click", () => {
+    const p = prompt("Relative pack file path (e.g. assets/myfx/shaders/core/custom.fsh):");
+    if (!p) return;
+    const clean = p.trim().replace(/\\/g, "/").replace(/^\/+/, "");
+    if (!clean) return;
+    saveEditorToCurrent();
+    packFiles[clean] = packFiles[clean] ?? "";
+    currentFile = clean;
+    renderFileList();
+    syncEditorFromCurrent();
+    runAudit();
+  });
+  document.getElementById("exportSarifBtn").addEventListener("click", () => {
+    runAudit();
+    downloadText("shadersmith.sarif", JSON.stringify(buildSarif(lastFindings), null, 2) + "\n");
+  });
+  document.getElementById("exportJsonBtn").addEventListener("click", () => {
+    runAudit();
+    downloadText("shadersmith-findings.json", JSON.stringify(lastFindings, null, 2) + "\n");
+  });
+
+  document.getElementById("presetLegacyBtn").addEventListener("click", () => loadPreset("legacy"));
+  document.getElementById("presetOverlayBtn").addEventListener("click", () => loadPreset("overlay"));
+  document.getElementById("presetPostFxBtn").addEventListener("click", () => loadPreset("postfx"));
+
+  const dz = document.getElementById("dropzone");
+  dz.addEventListener("dragover", ev => { ev.preventDefault(); dz.classList.add("dragover"); });
+  dz.addEventListener("dragleave", () => dz.classList.remove("dragover"));
+  dz.addEventListener("drop", async ev => {
+    ev.preventDefault();
+    dz.classList.remove("dragover");
+    const file = ev.dataTransfer.files[0];
+    if (file && file.name.toLowerCase().endsWith(".zip")) {
+      try {
+        packFiles = await readZipPack(file);
+        currentFile = Object.keys(packFiles)[0] || "";
+        document.getElementById("migrationNotice").textContent = `Loaded ${file.name}`;
+        renderFileList();
+        syncEditorFromCurrent();
+        runAudit();
+      } catch (err) {
+        alert("Failed to read .zip: " + err.message);
+      }
+    }
+  });
+  document.getElementById("zipInput").addEventListener("change", async ev => {
+    const file = ev.target.files[0];
+    if (!file) return;
+    try {
+      packFiles = await readZipPack(file);
+      currentFile = Object.keys(packFiles)[0] || "";
+      document.getElementById("migrationNotice").textContent = `Loaded ${file.name}`;
+      renderFileList();
+      syncEditorFromCurrent();
+      runAudit();
+    } catch (err) {
+      alert("Failed to read .zip: " + err.message);
+    }
+  });
+
+  renderStd140Diff();
+  loadPreset("legacy");
+})();
+</script>
+</body>
+</html>

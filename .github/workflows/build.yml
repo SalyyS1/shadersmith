@@ -29,13 +29,14 @@ jobs:
           java -jar "$JAR" --version
           java -jar "$JAR" --help
           java -jar "$JAR" contract --list
+          java -jar "$JAR" contract --mc 26.3
 
       - name: Fixture pack is caught on 26.3 and passes on 1.21.10
         run: |
           set -euo pipefail
           JAR=$(ls build/libs/shadersmith-*.jar | grep -v thin)
           set +e
-          java -jar "$JAR" check src/test/resources/oldpack --mc 26.3-pre-1 --json > findings.json
+          java -jar "$JAR" check src/test/resources/oldpack --mc 26.3 --json > findings.json
           code=$?
           set -e
           test "$code" = "1" || { echo "expected exit 1 for a pack with errors, got $code"; exit 1; }
@@ -44,23 +45,24 @@ jobs:
           jq -e '[.[] | select(.rule == "SM020")] | length == 1' findings.json
           java -jar "$JAR" check src/test/resources/oldpack --mc 1.21.10
 
-      - name: SARIF output is well formed
+      - name: SARIF v2.1.0 output includes rule descriptors and SRCROOT uris
         run: |
           set -euo pipefail
           JAR=$(ls build/libs/shadersmith-*.jar | grep -v thin)
-          java -jar "$JAR" check src/test/resources/oldpack --mc 26.2 --sarif out.sarif || true
+          java -jar "$JAR" check src/test/resources/oldpack --mc 26.3 --sarif out.sarif || true
           jq -e '.version == "2.1.0"' out.sarif
           jq -e '.runs[0].tool.driver.name == "shadersmith"' out.sarif
-          jq -e '.runs[0].results | length > 0' out.sarif
+          jq -e '.runs[0].tool.driver.rules | map(.shortDescription.text) | length > 0' out.sarif
+          jq -e '.runs[0].results[0].locations[0].physicalLocation.artifactLocation.uriBaseId == "%SRCROOT%"' out.sarif
 
       - name: Migrate writes directory and deterministic zip with sha1
         run: |
           set -euo pipefail
           JAR=$(ls build/libs/shadersmith-*.jar | grep -v thin)
-          java -jar "$JAR" migrate src/test/resources/oldpack --to 26.3-pre-1 --write --out /tmp/migrated --zip /tmp/migrated.zip | tee /tmp/migrate.out
+          java -jar "$JAR" migrate src/test/resources/oldpack --to 26.3 --write --out /tmp/migrated --zip /tmp/migrated.zip | tee /tmp/migrate.out
           grep -q "resource-pack-sha1=" /tmp/migrate.out
           set +e
-          java -jar "$JAR" check /tmp/migrated.zip --mc 26.3-pre-1 --json > after.json
+          java -jar "$JAR" check /tmp/migrated.zip --mc 26.3 --json > after.json
           set -e
           jq -e '[.[] | select(.severity == "error") | .rule] | unique == ["SM050"]' after.json
 
@@ -68,11 +70,11 @@ jobs:
         run: |
           set -euo pipefail
           JAR=$(ls build/libs/shadersmith-*.jar | grep -v thin)
-          java -jar "$JAR" new vignette --ns cifx --mc 26.3-pre-1 --uniform Strength:float=0.6 --always-on --out /tmp/fx
+          java -jar "$JAR" new vignette --ns cifx --mc 26.3 --uniform Strength:float=0.6 --always-on --out /tmp/fx
           test -f /tmp/fx/assets/cifx/post_effect/vignette.json
           test -f /tmp/fx/assets/cifx/shaders/post/vignette.fsh
           test -f /tmp/fx/assets/minecraft/post_effect/end_of_frame.json
-          java -jar "$JAR" check /tmp/fx --mc 26.3-pre-1
+          java -jar "$JAR" check /tmp/fx --mc 26.3
 
       - uses: actions/upload-artifact@v5
         if: always()

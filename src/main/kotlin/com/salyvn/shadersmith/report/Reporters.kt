@@ -1,6 +1,7 @@
 package com.salyvn.shadersmith.report
 
 import com.salyvn.shadersmith.core.BuildInfo
+import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -8,7 +9,56 @@ import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonObject
-import kotlinx.serialization.json.Json
+
+/** Metadata for a diagnostic rule emitted into OASIS SARIF v2.1.0 `tool.driver.rules`. */
+data class RuleMeta(
+    val id: String,
+    val name: String,
+    val shortDescription: String,
+    val defaultLevel: String,
+)
+
+object RuleCatalog {
+    private val BY_ID: Map<String, RuleMeta> = listOf(
+        RuleMeta("SM001", "ObsoleteCoreProgramJson", "Obsolete pre-1.21.5 shaders/core/*.json program definition", "warning"),
+        RuleMeta("SM002", "ObsoletePostProgramJson", "Obsolete pre-1.21.5 shaders/post/*.json program config", "warning"),
+        RuleMeta("SM010", "OverridesVanillaInclude", "Pack overrides a shared vanilla GLSL include file", "note"),
+        RuleMeta("SM011", "UnknownVanillaShaderOverride", "Shader under assets/minecraft/shaders has no matching vanilla entry", "warning"),
+        RuleMeta("SM020", "IncludeDeclaresVersion", "GLSL include file declares #version where forbidden (26.3+)", "error"),
+        RuleMeta("SM021", "MissingGlslVersion", "Main GLSL shader is missing a #version directive", "error"),
+        RuleMeta("SM022", "MismatchedGlslVersion", "GLSL #version differs from target Minecraft dialect", "warning"),
+        RuleMeta("SM030", "WrongIncludeDirective", "GLSL include directive (#moj_import vs #include) does not match target version", "error"),
+        RuleMeta("SM031", "MissingVanillaInclude", "GLSL shader includes a non-existent minecraft: include file", "error"),
+        RuleMeta("SM032", "MissingCustomInclude", "GLSL shader includes a custom-namespaced file missing from the pack", "error"),
+        RuleMeta("SM033", "CircularIncludeChain", "Circular GLSL #include / #moj_import dependency chain", "error"),
+        RuleMeta("SM040", "UniformBlockMemberOrderMismatch", "Positional std140 uniform block members are out of order", "error"),
+        RuleMeta("SM041", "UniformBlockSchemaMismatch", "Positional std140 uniform block members differ from vanilla contract", "error"),
+        RuleMeta("SM050", "MissingInterfaceLayoutLocation", "File-scope in/out variable lacks explicit layout(location = N) on 26.3+", "error"),
+        RuleMeta("SM051", "LegacyGlVertexId", "Shader uses legacy gl_VertexID instead of gl_VertexIndex on 26.3+", "error"),
+        RuleMeta("SM060", "LegacyPostEffectProgramPass", "Post-effect pass uses pre-1.21.5 'program' key instead of direct shaders", "error"),
+        RuleMeta("SM061", "LegacyPostEffectUniformList", "Post-effect pass uses 1.21.5 list uniforms instead of uniform-block map", "error"),
+        RuleMeta("SM062", "StalePostPassVertexShader", "Post-effect pass references a missing or outdated vanilla vertex shader", "warning"),
+        RuleMeta("SM063", "RemovedTransparencyPostChain", "Post-effect targets minecraft:transparency removed in 26.3", "warning"),
+        RuleMeta("SM064", "MissingPostPassShaderFile", "Post-effect pass references a missing vertex or fragment shader", "error"),
+        RuleMeta("SM065", "InvalidPostEffectTargetGraph", "Post-effect pass references an undeclared or unwritten internal render target", "error"),
+        RuleMeta("SM066", "PostPassSamplerMismatch", "Post-effect pass inputs and shader uniform sampler declarations disagree", "error"),
+        RuleMeta("SM067", "PostPassUniformBlockMismatch", "Post-effect pass uniform block values disagree with shader std140 layout", "error"),
+        RuleMeta("SM068", "MalformedPostEffectJson", "Post-effect JSON file cannot be parsed", "error"),
+        RuleMeta("SM070", "UnreadablePackMcmeta", "pack.mcmeta is unreadable or lacks a 'pack' object", "error"),
+        RuleMeta("SM071", "MissingPackFormat", "pack.mcmeta declares no pack format", "error"),
+        RuleMeta("SM072", "PackFormatRangeMismatch", "Target Minecraft pack format falls outside pack.mcmeta declared range", "warning"),
+        RuleMeta("SM073", "MissingMinMaxFormat", "Pack targeting format > 64 lacks min_format and max_format", "error"),
+        RuleMeta("SM074", "EmptyOrMissingOverlayDirectory", "pack.mcmeta overlay entry points to a missing or empty directory", "warning"),
+        RuleMeta("SM075", "InvalidPackMcmetaOverlayOrRange", "pack.mcmeta contains inverted format bounds or invalid overlay directory name", "error"),
+    ).associateBy { it.id }
+
+    fun get(ruleId: String): RuleMeta = BY_ID[ruleId] ?: RuleMeta(
+        id = ruleId,
+        name = ruleId,
+        shortDescription = "ShaderSmith contract diagnostic $ruleId",
+        defaultLevel = "warning",
+    )
+}
 
 /** The console report: one line per finding, grouped by version, worst first. */
 object ConsoleReporter {
@@ -26,23 +76,30 @@ object ConsoleReporter {
                 val where = finding.line?.let { "${finding.file}:$it" } ?: finding.file
                 out += "   ${finding.severity.label.padEnd(7)} ${finding.rule}  $where"
                 out += "           ${finding.message}"
-                finding.fix?.let { out += "           fix: ${describe(it)}" }
+                finding.fix?.let { out += "           fix: ${describeFix(it)}" }
             }
         }
         return out
     }
 
-    private fun describe(fix: Fix): String = when (fix) {
+    internal fun describeFix(fix: Fix): String = when (fix) {
         is Fix.ReplaceLine -> if (fix.with.isEmpty()) "delete line ${fix.line}" else "line ${fix.line} -> '${fix.with}'"
         is Fix.DeleteFile -> "delete the file (${fix.reason})"
-        is Fix.RewriteFile -> "rewrite the uniform block to the version's layout"
+        is Fix.RewriteFile -> "rewrite file to match target version contract"
     }
 }
 
-/** SARIF 2.1.0, so a CI run can show findings inline on a pull request. */
+private val PRETTY_JSON = Json {
+    prettyPrint = true
+    prettyPrintIndent = "  "
+}
+
+/** OASIS SARIF v2.1.0 report with full driver rule descriptors for GitHub Code Scanning. */
 object SarifReporter {
+    private const val DOCS_URI = "https://github.com/SalyyS1/shadersmith#diagnostic-rules-reference"
+
     fun render(findings: List<Finding>): String {
-        val rules = findings.map { it.rule }.distinct().sorted()
+        val ruleIds = findings.map { it.rule }.distinct().sorted()
         val sarif = buildJsonObject {
             put("\$schema", "https://json.schemastore.org/sarif-2.1.0.json")
             put("version", "2.1.0")
@@ -54,12 +111,22 @@ object SarifReporter {
                             put("version", BuildInfo.version)
                             put("informationUri", "https://github.com/SalyyS1/shadersmith")
                             put("rules", buildJsonArray {
-                                rules.forEach { rule -> add(buildJsonObject { put("id", rule) }) }
+                                ruleIds.forEach { ruleId ->
+                                    val meta = RuleCatalog.get(ruleId)
+                                    add(buildJsonObject {
+                                        put("id", meta.id)
+                                        put("name", meta.name)
+                                        putJsonObject("shortDescription") { put("text", meta.shortDescription) }
+                                        putJsonObject("defaultConfiguration") { put("level", meta.defaultLevel) }
+                                        put("helpUri", DOCS_URI)
+                                    })
+                                }
                             })
                         }
                     }
                     put("results", buildJsonArray {
                         findings.forEach { finding ->
+                            val cleanUri = finding.file.replace('\\', '/').trimStart('/')
                             add(buildJsonObject {
                                 put("ruleId", finding.rule)
                                 put("level", finding.severity.sarif)
@@ -67,7 +134,10 @@ object SarifReporter {
                                 put("locations", buildJsonArray {
                                     add(buildJsonObject {
                                         putJsonObject("physicalLocation") {
-                                            putJsonObject("artifactLocation") { put("uri", finding.file) }
+                                            putJsonObject("artifactLocation") {
+                                                put("uri", cleanUri)
+                                                put("uriBaseId", "%SRCROOT%")
+                                            }
                                             finding.line?.let { line ->
                                                 putJsonObject("region") { put("startLine", line) }
                                             }
@@ -75,7 +145,12 @@ object SarifReporter {
                                     })
                                 })
                                 putJsonObject("partialFingerprints") {
-                                    put("primaryLocationLineHash", "${finding.rule}:${finding.file}:${finding.line ?: 0}")
+                                    put("primaryLocationLineHash", "${finding.rule}:${finding.version}:$cleanUri:${finding.line ?: 0}")
+                                }
+                                putJsonObject("properties") {
+                                    put("minecraftVersion", finding.version)
+                                    put("fixable", finding.fix != null)
+                                    finding.fix?.let { put("suggestedFix", ConsoleReporter.describeFix(it)) }
                                 }
                             })
                         }
@@ -83,7 +158,7 @@ object SarifReporter {
                 })
             })
         }
-        return Json { prettyPrint = true; prettyPrintIndent = "  " }.encodeToString(JsonObject.serializer(), sarif) + "\n"
+        return PRETTY_JSON.encodeToString(JsonObject.serializer(), sarif) + "\n"
     }
 }
 
@@ -103,6 +178,6 @@ object JsonReporter {
                 })
             }
         }
-        return Json { prettyPrint = true; prettyPrintIndent = "  " }.encodeToString(JsonArray.serializer(), array) + "\n"
+        return PRETTY_JSON.encodeToString(JsonArray.serializer(), array) + "\n"
     }
 }

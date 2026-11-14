@@ -13,8 +13,15 @@ data class OverlayEntry(
     val directory: String,
     val min: Int,
     val max: Int,
+    val rawDirectory: String = directory,
 ) {
-    fun matches(packFormat: Int): Boolean = packFormat in min..max
+    fun matches(packFormat: Int): Boolean = min <= max && packFormat in min..max
+
+    val hasValidDirectoryName: Boolean get() = VALID_OVERLAY_DIR.matches(rawDirectory)
+
+    companion object {
+        private val VALID_OVERLAY_DIR = Regex("^[a-zA-Z0-9_-]+$")
+    }
 }
 
 /** The pack format range and overlays a `pack.mcmeta` claims, read leniently across both format eras. */
@@ -54,8 +61,9 @@ object PackMetaReader {
         val entries = overlaysObj?.get("entries") as? JsonArray ?: return emptyList()
         return entries.mapNotNull { elem ->
             val obj = elem as? JsonObject ?: return@mapNotNull null
-            val dir = (obj["directory"] as? JsonPrimitive)?.takeIf { it.isString }?.content?.trim('/')
+            val rawDir = (obj["directory"] as? JsonPrimitive)?.takeIf { it.isString }?.content?.trim()
                 ?.takeIf { it.isNotEmpty() } ?: return@mapNotNull null
+            val normalizedDir = rawDir.trim('/').takeIf { it.isNotEmpty() } ?: rawDir
             val minFmt = major(obj["min_format"])
             val maxFmt = major(obj["max_format"])
             val range = if (minFmt != null && maxFmt != null) {
@@ -64,7 +72,7 @@ object PackMetaReader {
                 parseFormatsRange(obj["formats"])
                     ?: major(obj["formats"])?.let { it to it }
             } ?: return@mapNotNull null
-            OverlayEntry(dir, range.first, range.second)
+            OverlayEntry(normalizedDir, range.first, range.second, rawDir)
         }
     }
 

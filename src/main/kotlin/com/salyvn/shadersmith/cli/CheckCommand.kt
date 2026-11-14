@@ -5,6 +5,7 @@ import com.github.ajalt.clikt.core.ProgramResult
 import com.github.ajalt.clikt.parameters.arguments.argument
 import com.github.ajalt.clikt.parameters.options.flag
 import com.github.ajalt.clikt.parameters.options.option
+import com.github.ajalt.clikt.parameters.types.choice
 import com.github.ajalt.clikt.parameters.types.path
 import com.salyvn.shadersmith.contract.ContractChecker
 import com.salyvn.shadersmith.contract.VersionContract
@@ -26,31 +27,45 @@ class CheckCommand : ShadersmithCommand(name = "check") {
 
     private val pack by argument("pack", help = "Pack directory or zip").path(mustExist = true)
 
-    private val mc by option("--mc", help = "Target version, e.g. 26.2 or 1.21.9, or a pack format number")
+    private val mc by option("--mc", help = "Target version, e.g. 26.3 or 1.21.9, or a pack format number")
 
-    private val range by option("--mc-range", help = "Check every known version in a range, e.g. 1.21.6..26.3-pre-1")
+    private val range by option("--mc-range", help = "Check every known version in a range, e.g. 1.21.6..26.3")
 
-    private val sarif by option("--sarif", help = "Also write findings as SARIF to this path").path()
+    private val format by option("--format", help = "Stdout output format: text, json, or sarif")
+        .choice("text", "json", "sarif")
+
+    private val sarif by option("--sarif", help = "Also write findings as OASIS SARIF v2.1.0 to this path").path()
 
     private val json by option("--json", help = "Print findings as JSON instead of text").flag()
 
     private val warningsAsErrors by option("--strict", help = "Exit 1 on warnings too").flag()
 
     override fun execute() {
+        if (json && format != null && format != "json") {
+            fail("Cannot combine --json with --format $format.")
+        }
+        val effectiveFormat = when {
+            json -> "json"
+            format != null -> format!!
+            else -> "text"
+        }
+
         val source = PackSource.read(pack)
         val versions = targets()
         val findings = versions.flatMap { contract -> ContractChecker(contract).check(source) }
 
-        if (json) {
-            echo(JsonReporter.render(findings).trimEnd())
-        } else {
-            ConsoleReporter.lines(findings, pack.fileName.toString()).forEach { echo(it) }
-            if (versions.size > 1) echo(windowSummary(versions, findings))
+        when (effectiveFormat) {
+            "json" -> echo(JsonReporter.render(findings).trimEnd())
+            "sarif" -> echo(SarifReporter.render(findings).trimEnd())
+            else -> {
+                ConsoleReporter.lines(findings, pack.fileName.toString()).forEach { echo(it) }
+                if (versions.size > 1) echo(windowSummary(versions, findings))
+            }
         }
         sarif?.let { target ->
             target.toAbsolutePath().parent?.let { Files.createDirectories(it) }
             Files.writeString(target, SarifReporter.render(findings))
-            if (!json) echo("SARIF written to $target")
+            if (effectiveFormat == "text") echo("SARIF written to $target")
         }
 
         val failing = findings.any { it.severity == Severity.ERROR || (warningsAsErrors && it.severity == Severity.WARNING) }
@@ -61,7 +76,7 @@ class CheckCommand : ShadersmithCommand(name = "check") {
         if (mc != null && range != null) fail("Give either --mc or --mc-range, not both.")
         range?.let { text ->
             val parts = text.split("..")
-            if (parts.size != 2) fail("--mc-range wants 'from..to', like 1.21.6..26.2")
+            if (parts.size != 2) fail("--mc-range wants 'from..to', like 1.21.6..26.3")
             return dataset.range(dataset.resolve(parts[0].trim()), dataset.resolve(parts[1].trim()))
         }
         return listOf(dataset.resolve(mc ?: dataset.versions.last().id))

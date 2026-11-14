@@ -144,4 +144,133 @@ class ContractCheckerTest {
         val on263 = ContractChecker(dataset.resolve("26.3-pre-1")).check(src)
         assertTrue(on263.none { it.rule == "SM032" }, "overlay_26_3 provides myfx:math.glsl on 26.3-pre-1")
     }
+
+    @Test
+    fun `detects circular GLSL include chains with SM033`(@TempDir dir: Path) {
+        val packDir = dir.resolve("cycle-pack")
+        Files.createDirectories(packDir.resolve("assets/myfx/shaders/include"))
+        Files.writeString(
+            packDir.resolve("pack.mcmeta"),
+            """{ "pack": { "min_format": 90, "max_format": 99 } }""",
+        )
+        Files.writeString(
+            packDir.resolve("assets/myfx/shaders/include/a.glsl"),
+            "#include <myfx:b.glsl>\nfloat a() { return 1.0; }\n",
+        )
+        Files.writeString(
+            packDir.resolve("assets/myfx/shaders/include/b.glsl"),
+            "#include <myfx:a.glsl>\nfloat b() { return 2.0; }\n",
+        )
+
+        val findings = ContractChecker(dataset.resolve("26.3")).check(PackSource.read(packDir))
+        val cycle = findings.filter { it.rule == "SM033" }
+        assertEquals(1, cycle.size)
+        assertEquals(Severity.ERROR, cycle.single().severity)
+        assertTrue(cycle.single().message.contains("assets/myfx/shaders/include/a.glsl"))
+        assertTrue(cycle.single().message.contains("assets/myfx/shaders/include/b.glsl"))
+    }
+
+    @Test
+    fun `cross checks post effect targets samplers and std140 uniform blocks on 26_3`(@TempDir dir: Path) {
+        val packDir = dir.resolve("postfx-pack")
+        Files.createDirectories(packDir.resolve("assets/myfx/post_effect"))
+        Files.createDirectories(packDir.resolve("assets/myfx/shaders/post"))
+        Files.writeString(
+            packDir.resolve("pack.mcmeta"),
+            """{ "pack": { "min_format": 90, "max_format": 99 } }""",
+        )
+        Files.writeString(
+            packDir.resolve("assets/myfx/shaders/post/tint.fsh"),
+            """
+            #version 330
+            uniform sampler2D InSampler;
+            uniform sampler2D MaskSampler;
+            layout(location = 0) in vec2 texCoord;
+            layout(std140) uniform TintConfig {
+                vec3 TintColor;
+                float Strength;
+            };
+            layout(location = 0) out vec4 fragColor;
+            void main() {
+                fragColor = texture(InSampler, texCoord) * texture(MaskSampler, texCoord) * vec4(TintColor, Strength);
+            }
+            """.trimIndent(),
+        )
+        Files.writeString(
+            packDir.resolve("assets/myfx/post_effect/tint.json"),
+            """
+            {
+              "targets": {
+                "swap": {}
+              },
+              "passes": [
+                {
+                  "vertex_shader": "minecraft:core/screenquad",
+                  "fragment_shader": "myfx:post/tint",
+                  "inputs": [
+                    { "sampler_name": "In", "target": "swap" },
+                    { "sampler_name": "Unused", "target": "minecraft:main" }
+                  ],
+                  "output": "undeclared_buf",
+                  "uniforms": {
+                    "TintConfig": [
+                      { "name": "Strength", "type": "float", "value": 0.5 },
+                      { "name": "TintColor", "type": "vec3", "value": [1.0, 0.0, 0.0] }
+                    ],
+                    "GhostBlock": [
+                      { "name": "Foo", "type": "float", "value": 1.0 }
+                    ]
+                  }
+                },
+                {
+                  "vertex_shader": "minecraft:post/rotscale",
+                  "fragment_shader": "minecraft:post/blit"
+                }
+              ]
+            }
+            """.trimIndent(),
+        )
+
+        val findings = ContractChecker(dataset.resolve("26.3")).check(PackSource.read(packDir))
+
+        // minecraft:post/rotscale is a valid vanilla 26.3 vertex shader and must not trigger SM062
+        assertTrue(findings.none { it.rule == "SM062" }, "minecraft:post/rotscale exists in vanilla 26.3")
+        // SM065: reading swap before write (warning) + writing undeclared_buf (error)
+        assertTrue(findings.any { it.rule == "SM065" && it.severity == Severity.WARNING && it.message.contains("swap") })
+        assertTrue(findings.any { it.rule == "SM065" && it.severity == Severity.ERROR && it.message.contains("undeclared_buf") })
+        // SM066: MaskSampler unbound (error) + UnusedSampler undeclared in tint.fsh (warning)
+        assertTrue(findings.any { it.rule == "SM066" && it.severity == Severity.ERROR && it.message.contains("MaskSampler") })
+        assertTrue(findings.any { it.rule == "SM066" && it.severity == Severity.WARNING && it.message.contains("Unused") })
+        // SM067: TintConfig member order mismatch (error) + GhostBlock undeclared (warning)
+        assertTrue(findings.any { it.rule == "SM067" && it.severity == Severity.ERROR && it.message.contains("TintConfig") })
+        assertTrue(findings.any { it.rule == "SM067" && it.severity == Severity.WARNING && it.message.contains("GhostBlock") })
+    }
+
+    @Test
+    fun `reports malformed post effect JSON as SM068 and invalid mcmeta bounds or overlay dir as SM075`(@TempDir dir: Path) {
+        val packDir = dir.resolve("broken-meta-pack")
+        Files.createDirectories(packDir.resolve("assets/myfx/post_effect"))
+        Files.writeString(
+            packDir.resolve("pack.mcmeta"),
+            """
+            {
+              "pack": { "min_format": 99, "max_format": 88 },
+              "overlays": {
+                "entries": [
+                  { "directory": "nested/bad_dir", "min_format": 88, "max_format": 97 },
+                  { "directory": "inverted_overlay", "min_format": 97, "max_format": 88 }
+                ]
+              }
+            }
+            """.trimIndent(),
+        )
+        Files.writeString(
+            packDir.resolve("assets/myfx/post_effect/malformed.json"),
+            "{ \"targets\": { \"swap\": {} ",
+        )
+
+        val findings = ContractChecker(dataset.resolve("26.3")).check(PackSource.read(packDir))
+        assertTrue(findings.any { it.rule == "SM068" && it.severity == Severity.ERROR })
+        assertEquals(3, findings.count { it.rule == "SM075" && it.severity == Severity.ERROR })
+    }
 }

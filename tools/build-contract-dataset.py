@@ -7,28 +7,29 @@ version: which files the client reads, which uniform blocks exist with their mem
 expected, and which post-effect schema era applies.
 
 Every fact is extracted from the vanilla assets published by misode/mcmeta under its per-version
-`<id>-assets` tags. Nothing from Mojang is copied into the dataset — only structural facts: file
-names, block names, member names and types. Re-run this to add a version:
+`<id>-assets` tags. Nothing from Mojang is copied into the dataset - only structural facts: file
+names, block names, member names and types. Re-run this to add or refresh versions:
 
-    python tools/build-contract-dataset.py 26.3-pre-1 --out src/main/resources/contract-dataset.json
-
-Needs `gh` on PATH for directory listings and network access for the file contents.
+    python3 tools/build-contract-dataset.py --append 26.3 --out src/main/resources/contract-dataset.json
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import os
+import pathlib
 import re
-import subprocess
 import sys
 import urllib.request
 from datetime import datetime, timezone
 
 RAW = "https://raw.githubusercontent.com/misode/mcmeta/{ref}/{path}"
+API_CONTENTS = "https://api.github.com/repos/misode/mcmeta/contents/{path}?ref={ref}"
+VERSIONS_URL = "https://raw.githubusercontent.com/misode/mcmeta/summary/versions/data.json"
 DEFAULT_VERSIONS = [
     "1.21.4", "1.21.5", "1.21.6", "1.21.8", "1.21.9",
-    "1.21.10", "1.21.11", "26.1", "26.2", "26.3-pre-1",
+    "1.21.10", "1.21.11", "26.1", "26.2", "26.3-pre-1", "26.3",
 ]
 
 BLOCK = re.compile(
@@ -42,21 +43,41 @@ VERSION_LINE = re.compile(r"^#version\s+(\d+)", re.MULTILINE)
 EXTRA_BLOCK_FILES = ["clouds.vsh", "lightmap.fsh", "animate_sprite.vsh", "terrain.vsh", "gui.vsh"]
 
 
+def _github_headers() -> dict[str, str]:
+    headers = {
+        "Accept": "application/vnd.github+json",
+        "User-Agent": "shadersmith-dataset-builder",
+    }
+    token = os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN")
+    if not token:
+        token_file = pathlib.Path.home() / ".config" / "github_token"
+        if token_file.is_file():
+            token = token_file.read_text(encoding="utf-8").strip()
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    return headers
+
+
 def listing(path: str, ref: str) -> list[str]:
     """Names in one directory of the assets tree, or [] when the directory does not exist."""
-    result = subprocess.run(
-        ["gh", "api", f"repos/misode/mcmeta/contents/{path}?ref={ref}", "--jq", ".[].name"],
-        capture_output=True,
-        text=True,
-    )
-    if result.returncode != 0:
+    req = urllib.request.Request(API_CONTENTS.format(path=path, ref=ref), headers=_github_headers())
+    try:
+        with urllib.request.urlopen(req, timeout=30) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+        if not isinstance(payload, list):
+            return []
+        return [entry["name"] for entry in payload if isinstance(entry, dict) and "name" in entry]
+    except Exception:
         return []
-    return [line for line in result.stdout.splitlines() if line]
 
 
 def fetch(path: str, ref: str) -> str | None:
+    req = urllib.request.Request(
+        RAW.format(ref=ref, path=path),
+        headers={"User-Agent": "shadersmith-dataset-builder"},
+    )
     try:
-        with urllib.request.urlopen(RAW.format(ref=ref, path=path), timeout=30) as response:
+        with urllib.request.urlopen(req, timeout=30) as response:
             return response.read().decode("utf-8", "replace")
     except Exception:
         return None
@@ -174,22 +195,47 @@ def row(version: str, formats: dict[str, dict]) -> dict:
     }
 
 
+def load_formats(path_or_none: str | None) -> dict[str, dict]:
+    if path_or_none and pathlib.Path(path_or_none).is_file():
+        with open(path_or_none, encoding="utf-8") as handle:
+            return {entry["id"]: entry for entry in json.load(handle)}
+    req = urllib.request.Request(VERSIONS_URL, headers={"User-Agent": "shadersmith-dataset-builder"})
+    with urllib.request.urlopen(req, timeout=30) as response:
+        entries = json.loads(response.read().decode("utf-8"))
+    return {entry["id"]: entry for entry in entries}
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("versions", nargs="*", default=[], help="version ids; default is the known set")
+    parser.add_argument("--append", action="store_true", help="merge/replace the given versions into existing --out")
     parser.add_argument("--out", default="src/main/resources/contract-dataset.json")
-    parser.add_argument("--formats", default="../refs/mcmeta-versions.json",
-                        help="misode/mcmeta summary/versions/data.json, for the pack format numbers")
+    parser.add_argument("--formats", default="", help="optional local misode/mcmeta summary/versions/data.json")
     args = parser.parse_args()
 
-    with open(args.formats, encoding="utf-8") as handle:
-        formats = {entry["id"]: entry for entry in json.load(handle)}
-
+    formats = load_formats(args.formats or None)
     versions = args.versions or DEFAULT_VERSIONS
-    rows = []
+
+    existing_by_id: dict[str, dict] = {}
+    ordered_ids: list[str] = []
+    if args.append and pathlib.Path(args.out).is_file():
+        with open(args.out, encoding="utf-8") as handle:
+            prev = json.load(handle)
+        for item in prev.get("versions", []):
+            existing_by_id[item["id"]] = item
+            ordered_ids.append(item["id"])
+
     for version in versions:
         print(f"reading {version} ...", file=sys.stderr)
-        rows.append(row(version, formats))
+        built = row(version, formats)
+        existing_by_id[version] = built
+        if version not in ordered_ids:
+            ordered_ids.append(version)
+
+    rows = sorted(
+        (existing_by_id[vid] for vid in ordered_ids),
+        key=lambda r: (r["packFormat"], r.get("packFormatMinor", 0)),
+    )
 
     dataset = {
         "generated": datetime.now(timezone.utc).strftime("%Y-%m-%d"),
