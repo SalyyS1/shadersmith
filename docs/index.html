@@ -3,8 +3,8 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>shadersmith v0.3.0 | Minecraft GLSL, Overlay &amp; Post-Effect Contract Auditor</title>
-  <meta name="description" content="Zero-upload browser GLSL shader contract auditor, pack.mcmeta overlay resolver, std140 byte-offset inspector, and 26.3 migrator for Minecraft 1.21.4 through 26.3.">
+  <title>shadersmith v0.4.0 | Minecraft GLSL, SSBO Layout, Pipeline &amp; Post-Effect Auditor</title>
+  <meta name="description" content="Zero-upload browser GLSL shader contract auditor, std140/std430 SSBO byte-offset calculator, Minecraft 26.3 Wavelet OIT pipeline linker, pack.mcmeta overlay resolver, and migrator for 1.21.4 through 26.3.">
   <style>
     :root {
       --bg: #0b0f17;
@@ -304,10 +304,10 @@
 <div class="wrap">
   <header>
     <div>
-      <h1>shadersmith <span class="tag">v0.3.0</span></h1>
+      <h1>shadersmith <span class="tag">v0.4.0</span></h1>
       <p class="subtitle">
-        Zero-upload client-side Minecraft GLSL shader contract auditor, <code>pack.mcmeta</code> overlay stack resolver,
-        <code>std140</code> uniform byte-offset explorer, and 26.3 mechanical migrator (1.21.4 through 26.3).
+        Zero-upload client-side Minecraft GLSL shader contract auditor, <code>std140</code>/<code>std430</code> SSBO layout verifier,
+        26.3 Wavelet OIT pipeline state compiler, multi-pass texture format validator, and mechanical migrator (1.21.4 through 26.3).
       </p>
     </div>
     <div class="nav-links">
@@ -331,6 +331,7 @@
       <button class="btn" id="presetLegacyBtn" type="button">Preset: 1.21.10 HUD Pack on 26.3</button>
       <button class="btn" id="presetOverlayBtn" type="button">Preset: Dual-Era Overlay Pack</button>
       <button class="btn" id="presetPostFxBtn" type="button">Preset: Broken 26.3 Post-Effect</button>
+      <button class="btn" id="presetSsboOitBtn" type="button">Preset: 26.3 SSBO, OIT &amp; Multi-Pass Format</button>
     </div>
   </div>
 
@@ -376,6 +377,20 @@
     <div class="findings-list" id="findingsList"></div>
   </div>
 
+  <div class="card" style="margin-bottom: 20px;">
+    <div class="card-head">
+      <span>Custom GLSL <code>std140</code> vs <code>std430</code> SSBO Byte-Offset &amp; Stride Calculator</span>
+      <span id="customLayoutSummary" style="font-family: var(--mono); font-size: 0.78rem; color: var(--muted);"></span>
+    </div>
+    <div class="std140-grid" style="grid-template-columns: 360px 1fr;">
+      <div>
+        <div style="margin-bottom: 6px; font-size: 0.8rem; color: var(--muted);">Edit GLSL <code>buffer</code> / <code>uniform</code> declaration:</div>
+        <textarea class="code-editor" id="customLayoutEditor" spellcheck="false" style="min-height: 220px; border: 1px solid var(--border); border-radius: 6px;"></textarea>
+      </div>
+      <div id="customLayoutOutput"></div>
+    </div>
+  </div>
+
   <div class="card">
     <div class="card-head">
       <span>Vanilla <code>std140</code> Uniform Block Byte-Offset Diff Explorer</span>
@@ -391,7 +406,7 @@
 
   <footer>
     <span>Apache-2.0 License | Built by <a href="https://github.com/SalyyS1">SalyyS1</a></span>
-    <span>CLI &amp; GitHub Action: <code>uses: SalyyS1/shadersmith@v0.3.0</code></span>
+    <span>CLI &amp; GitHub Action: <code>uses: SalyyS1/shadersmith@v0.4.0</code></span>
   </footer>
 </div>
 

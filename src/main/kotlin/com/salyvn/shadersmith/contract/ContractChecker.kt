@@ -1,8 +1,13 @@
 package com.salyvn.shadersmith.contract
 
+import com.salyvn.shadersmith.layout.SsboValidator
+import com.salyvn.shadersmith.pack.DeclaredSampler
 import com.salyvn.shadersmith.pack.GlslSource
+import com.salyvn.shadersmith.pack.GlslStruct
 import com.salyvn.shadersmith.pack.PackFile
 import com.salyvn.shadersmith.pack.PackSource
+import com.salyvn.shadersmith.pack.SamplerValueKind
+import com.salyvn.shadersmith.pipeline.PipelineCompiler
 import com.salyvn.shadersmith.report.Finding
 import com.salyvn.shadersmith.report.Fix
 import com.salyvn.shadersmith.report.Severity
@@ -10,11 +15,15 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.booleanOrNull
+import kotlinx.serialization.json.doubleOrNull
+import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonObject
 
 /**
  * Checks one pack against one version's contract, resolving active `pack.mcmeta` overlays for the version's
- * pack format before checking shaders, include dependency graphs, and post-effect pass wiring.
+ * pack format before checking shaders, include dependency graphs, std140/std430 buffer layouts, 26.3 core
+ * shader pipeline states, and multi-pass post-effect texture format bindings.
  */
 class ContractChecker(private val contract: VersionContract) {
 
@@ -32,10 +41,16 @@ class ContractChecker(private val contract: VersionContract) {
             when {
                 file.shaderDirectory == "core" && file.fileName.endsWith(".json") -> checkCoreJson(file, findings)
                 file.shaderDirectory == "post" && file.fileName.endsWith(".json") -> checkPostJson(file, findings)
-                file.isShaderSource -> checkSource(file, glslByPath.getValue(file.relative), effectivePaths, findings)
-                file.isPostEffectDefinition -> checkPostEffect(file, effectivePaths, glslByPath, findings)
+                file.isShaderSource -> {
+                    val transitive = collectTransitiveGlsl(file.relative, glslByPath)
+                    checkSource(file, glslByPath.getValue(file.relative), effectivePaths, transitive, findings)
+                }
+                file.isPostEffectDefinition -> checkPostEffect(file, effectiveByPath, effectivePaths, glslByPath, findings)
             }
         }
+
+        checkCorePipelinePairs(effective, glslByPath, findings)
+
         return findings.sortedWith(compareBy({ it.severity.ordinal }, { it.file }, { it.line ?: 0 }))
     }
 
@@ -73,14 +88,52 @@ class ContractChecker(private val contract: VersionContract) {
         file: PackFile,
         source: GlslSource,
         effectivePaths: Set<String>,
+        transitive: TransitiveGlslContract,
         out: MutableList<Finding>,
     ) {
         checkOverridesVanilla(file, out)
         checkVersionLine(file, source, out)
         checkDirectives(file, source, effectivePaths, out)
         checkBlocks(file, source, out)
+        SsboValidator.checkFile(
+            file = file,
+            source = source,
+            versionId = contract.id,
+            defaultGlslVersion = contract.glslVersion,
+            transitiveStructs = transitive.structs,
+            transitiveExtensions = transitive.extensions,
+            out = out,
+        )
         checkInterfaceLayout(file, source, out)
+        PipelineCompiler.checkSingleStage(
+            file = file,
+            source = source,
+            contract = contract,
+            transitiveIncludes = transitive.includeTargets,
+            out = out,
+        )
         checkVertexId(file, source, out)
+    }
+
+    private fun checkCorePipelinePairs(
+        effective: List<PackFile>,
+        glslByPath: Map<String, GlslSource>,
+        out: MutableList<Finding>,
+    ) {
+        val coreShaders = effective.filter { it.shaderDirectory == "core" && it.isShaderSource }
+        val byProgram = coreShaders.groupBy { "${it.namespace ?: "minecraft"}:${it.fileName.substringBeforeLast('.')}" }
+        byProgram.values.forEach { stageFiles ->
+            val vsh = stageFiles.firstOrNull { it.fileName.endsWith(".vsh") } ?: return@forEach
+            val fsh = stageFiles.firstOrNull { it.fileName.endsWith(".fsh") } ?: return@forEach
+            PipelineCompiler.checkStagePair(
+                vshFile = vsh,
+                vshSource = glslByPath.getValue(vsh.relative),
+                fshFile = fsh,
+                fshSource = glslByPath.getValue(fsh.relative),
+                contract = contract,
+                out = out,
+            )
+        }
     }
 
     /** A file under minecraft:shaders that vanilla does not have on this version is never loaded. */
@@ -333,12 +386,23 @@ class ContractChecker(private val contract: VersionContract) {
         }
     }
 
+    private enum class TargetFormatFamily { FLOAT, INT, UINT, DEPTH }
+
+    private data class TargetSpec(
+        val name: String,
+        val persistent: Boolean,
+        val formatName: String,
+        val family: TargetFormatFamily,
+    )
+
     /**
      * Validates post-effect JSON syntax, schema era, vertex/fragment shader existence, internal/external
-     * render target graph wiring, sampler bindings, and std140 uniform block contracts.
+     * render target graph wiring, multi-pass texture format bindings, ping-pong feedback hazards, sampler
+     * bindings, and std140 uniform block contracts.
      */
     private fun checkPostEffect(
         file: PackFile,
+        effectiveByPath: Map<String, PackFile>,
         effectivePaths: Set<String>,
         glslByPath: Map<String, GlslSource>,
         out: MutableList<Finding>,
@@ -405,11 +469,14 @@ class ContractChecker(private val contract: VersionContract) {
         if (contract.postEffectSchema == "program-ref" || contract.postEffectSchema == "legacy-shaders-post") return
         if (passes == null) return
 
-        val declaredTargets = (root["targets"] as? JsonObject)?.keys ?: emptySet()
+        val targetSpecs = parseAndValidateTargets(file, root["targets"] as? JsonObject, out)
+        val declaredTargets = targetSpecs.keys
         val externalTargets = ((root["external_targets"] as? JsonArray)
             ?.mapNotNull { (it as? JsonPrimitive)?.takeIf { p -> p.isString }?.content }
             ?.toSet() ?: emptySet())
         val writtenTargets = mutableSetOf<String>()
+        val readTargets = mutableSetOf<String>()
+        val checkedStagePairs = mutableSetOf<Pair<String, String>>()
 
         passes.forEachIndexed { passIndex, elem ->
             val pass = elem as? JsonObject ?: return@forEachIndexed
@@ -420,37 +487,150 @@ class ContractChecker(private val contract: VersionContract) {
             val vshLogical = vshId?.let { checkPostPassVertexShader(file, it, effectivePaths, out) }
             val fshLogical = fshId?.let { checkPostPassFragmentShader(file, it, effectivePaths, out) }
 
+            if (vshLogical != null && fshLogical != null && vshLogical in glslByPath && fshLogical in glslByPath) {
+                val pairKey = vshLogical to fshLogical
+                if (checkedStagePairs.add(pairKey)) {
+                    PipelineCompiler.checkStagePair(
+                        vshFile = effectiveByPath.getValue(vshLogical),
+                        vshSource = glslByPath.getValue(vshLogical),
+                        fshFile = effectiveByPath.getValue(fshLogical),
+                        fshSource = glslByPath.getValue(fshLogical),
+                        contract = contract,
+                        out = out,
+                    )
+                }
+            }
+
+            val fshContract = fshLogical?.takeIf { it in glslByPath }?.let { collectTransitiveGlsl(it, glslByPath) }
+            val vshContract = vshLogical?.takeIf { it in glslByPath }?.let { collectTransitiveGlsl(it, glslByPath) }
+            val vshIsStandardQuad = vshId in STANDARD_SCREENQUAD_SHADERS && (vshLogical == null || vshLogical !in glslByPath)
+
+            val outputTarget = (pass["output"] as? JsonPrimitive)?.takeIf { it.isString }?.content
             val inputsArray = pass["inputs"] as? JsonArray
             val boundSamplerNames = mutableListOf<String>()
+
             inputsArray?.forEach { inputElem ->
                 val inputObj = inputElem as? JsonObject ?: return@forEach
                 val samplerName = (inputObj["sampler_name"] as? JsonPrimitive)?.takeIf { it.isString }?.content
                 if (samplerName != null) boundSamplerNames += samplerName
+
                 val inputTarget = (inputObj["target"] as? JsonPrimitive)?.takeIf { it.isString }?.content
-                if (inputTarget != null && !isExternalTarget(inputTarget, externalTargets)) {
-                    if (inputTarget !in declaredTargets) {
+                val texLocation = (inputObj["location"] as? JsonPrimitive)?.takeIf { it.isString }?.content
+                val useDepth = (inputObj["use_depth_buffer"] as? JsonPrimitive)?.booleanOrNull ?: false
+                val bilinear = (inputObj["bilinear"] as? JsonPrimitive)?.booleanOrNull ?: false
+
+                if (texLocation != null && inputTarget == null) {
+                    val w = (inputObj["width"] as? JsonPrimitive)?.intOrNull
+                    val h = (inputObj["height"] as? JsonPrimitive)?.intOrNull
+                    if (w == null || h == null || w <= 0 || h <= 0) {
                         out += Finding(
-                            rule = "SM065",
+                            rule = "SM076",
                             severity = Severity.ERROR,
                             version = contract.id,
                             file = file.physicalRelative,
                             line = null,
-                            message = "$passLabel reads undeclared internal target '$inputTarget'. Declare it under \"targets\" or use a namespaced target such as \"minecraft:main\".",
+                            message = "$passLabel texture input '$texLocation' (sampler '${samplerName ?: "?"}') must declare positive integer 'width' and 'height'.",
                         )
-                    } else if (inputTarget !in writtenTargets) {
+                    }
+                }
+
+                if (inputTarget != null) {
+                    if (!isExternalTarget(inputTarget, externalTargets)) {
+                        readTargets += inputTarget
+                        val spec = targetSpecs[inputTarget]
+                        if (spec == null) {
+                            out += Finding(
+                                rule = "SM065",
+                                severity = Severity.ERROR,
+                                version = contract.id,
+                                file = file.physicalRelative,
+                                line = null,
+                                message = "$passLabel reads undeclared internal target '$inputTarget'. Declare it under \"targets\" or use a namespaced target such as \"minecraft:main\".",
+                            )
+                        } else if (inputTarget !in writtenTargets && !spec.persistent) {
+                            out += Finding(
+                                rule = "SM065",
+                                severity = Severity.WARNING,
+                                version = contract.id,
+                                file = file.physicalRelative,
+                                line = null,
+                                message = "$passLabel reads internal target '$inputTarget' before any earlier pass writes to it.",
+                            )
+                        }
+                    }
+
+                    // Same-pass read/write feedback hazard (ping-pong violation, SM069)
+                    if (outputTarget != null && inputTarget == outputTarget && !useDepth) {
                         out += Finding(
-                            rule = "SM065",
+                            rule = "SM069",
+                            severity = Severity.ERROR,
+                            version = contract.id,
+                            file = file.physicalRelative,
+                            line = null,
+                            message = "$passLabel binds target '$inputTarget' as both an input sampler ('${samplerName ?: "?"}') and the pass 'output' without a ping-pong swap target, creating an OpenGL read/write feedback loop.",
+                        )
+                    }
+
+                    // Texture format & depth/bilinear binding checks against GLSL sampler declaration (SM069)
+                    val targetSpec = targetSpecs[inputTarget]
+                    val effectiveFamily = when {
+                        useDepth -> TargetFormatFamily.DEPTH
+                        targetSpec != null -> targetSpec.family
+                        else -> TargetFormatFamily.FLOAT
+                    }
+                    val formatLabel = if (useDepth) "depth_buffer" else (targetSpec?.formatName ?: "RGBA8")
+
+                    if (bilinear && (effectiveFamily == TargetFormatFamily.INT || effectiveFamily == TargetFormatFamily.UINT)) {
+                        out += Finding(
+                            rule = "SM069",
+                            severity = Severity.ERROR,
+                            version = contract.id,
+                            file = file.physicalRelative,
+                            line = null,
+                            message = "$passLabel enables 'bilinear: true' on integer render target '$inputTarget' ($formatLabel); OpenGL forbids GL_LINEAR filtering on integer texture formats.",
+                        )
+                    }
+
+                    if (samplerName != null && fshContract != null) {
+                        val matchedSampler = fshContract.declaredSamplers["${samplerName}Sampler"]
+                            ?: fshContract.declaredSamplers[samplerName]
+                            ?: vshContract?.declaredSamplers?.get("${samplerName}Sampler")
+                            ?: vshContract?.declaredSamplers?.get(samplerName)
+
+                        if (matchedSampler != null) {
+                            checkSamplerFormatCompatibility(
+                                file = file,
+                                passLabel = passLabel,
+                                inputTarget = inputTarget,
+                                formatLabel = formatLabel,
+                                family = effectiveFamily,
+                                bilinear = bilinear,
+                                sampler = matchedSampler,
+                                out = out,
+                            )
+                        } else if (bilinear && effectiveFamily == TargetFormatFamily.DEPTH) {
+                            out += Finding(
+                                rule = "SM069",
+                                severity = Severity.WARNING,
+                                version = contract.id,
+                                file = file.physicalRelative,
+                                line = null,
+                                message = "$passLabel samples depth attachment '$inputTarget' with 'bilinear: true'; linear filtering of non-linear hardware depth values distorts reconstructed positions.",
+                            )
+                        }
+                    } else if (bilinear && effectiveFamily == TargetFormatFamily.DEPTH) {
+                        out += Finding(
+                            rule = "SM069",
                             severity = Severity.WARNING,
                             version = contract.id,
                             file = file.physicalRelative,
                             line = null,
-                            message = "$passLabel reads internal target '$inputTarget' before any earlier pass writes to it.",
+                            message = "$passLabel samples depth attachment '$inputTarget' with 'bilinear: true'; linear filtering of non-linear hardware depth values distorts reconstructed positions.",
                         )
                     }
                 }
             }
 
-            val outputTarget = (pass["output"] as? JsonPrimitive)?.takeIf { it.isString }?.content
             if (outputTarget != null) {
                 if (!isExternalTarget(outputTarget, externalTargets)) {
                     if (outputTarget !in declaredTargets) {
@@ -467,10 +647,6 @@ class ContractChecker(private val contract: VersionContract) {
                     }
                 }
             }
-
-            val fshContract = fshLogical?.takeIf { it in glslByPath }?.let { collectTransitiveGlsl(it, glslByPath) }
-            val vshContract = vshLogical?.takeIf { it in glslByPath }?.let { collectTransitiveGlsl(it, glslByPath) }
-            val vshIsStandardQuad = vshId in STANDARD_SCREENQUAD_SHADERS && (vshLogical == null || vshLogical !in glslByPath)
 
             if (fshContract != null) {
                 val boundUniformNames = boundSamplerNames.flatMap { listOf("${it}Sampler", it) }.toSet()
@@ -550,7 +726,197 @@ class ContractChecker(private val contract: VersionContract) {
                 }
             }
         }
+
+        // Flag declared internal render targets never read by any pass (only when passes exist)
+        if (passes.isNotEmpty()) {
+            declaredTargets.forEach { targetName ->
+                if (targetName !in readTargets && (targetName in writtenTargets || passes.size > 0)) {
+                    // Do not warn if no pass has any inputs/outputs at all (empty stub)
+                    val anyPassHasIo = passes.any { (it as? JsonObject)?.let { o -> "inputs" in o || "output" in o } == true }
+                    if (anyPassHasIo) {
+                        out += Finding(
+                            rule = "SM076",
+                            severity = Severity.WARNING,
+                            version = contract.id,
+                            file = file.physicalRelative,
+                            line = null,
+                            message = "Internal target '$targetName' is declared under \"targets\" but never sampled by any pass.",
+                        )
+                    }
+                }
+            }
+        }
     }
+
+    private fun parseAndValidateTargets(
+        file: PackFile,
+        targetsObj: JsonObject?,
+        out: MutableList<Finding>,
+    ): Map<String, TargetSpec> {
+        if (targetsObj == null) return emptyMap()
+        val result = linkedMapOf<String, TargetSpec>()
+        for ((name, elem) in targetsObj) {
+            val cfg = elem as? JsonObject
+            if (cfg == null) {
+                out += Finding(
+                    rule = "SM076",
+                    severity = Severity.ERROR,
+                    version = contract.id,
+                    file = file.physicalRelative,
+                    line = null,
+                    message = "Internal target '$name' must be a JSON object.",
+                )
+                continue
+            }
+            val hasWidth = "width" in cfg
+            val hasHeight = "height" in cfg
+            val width = (cfg["width"] as? JsonPrimitive)?.intOrNull
+            val height = (cfg["height"] as? JsonPrimitive)?.intOrNull
+            if (hasWidth != hasHeight) {
+                out += Finding(
+                    rule = "SM076",
+                    severity = Severity.ERROR,
+                    version = contract.id,
+                    file = file.physicalRelative,
+                    line = null,
+                    message = "Internal target '$name' defines ${if (hasWidth) "'width' without 'height'" else "'height' without 'width'"}; Minecraft's PostChainConfig codec requires both dimensions or neither.",
+                )
+            } else if (hasWidth && (width == null || height == null || width !in 1..16384 || height !in 1..16384)) {
+                out += Finding(
+                    rule = "SM076",
+                    severity = Severity.ERROR,
+                    version = contract.id,
+                    file = file.physicalRelative,
+                    line = null,
+                    message = "Internal target '$name' has invalid dimensions (${cfg["width"]} x ${cfg["height"]}); expected integers in 1..16384.",
+                )
+            }
+
+            val persistentElem = cfg["persistent"]
+            val persistent = if (persistentElem != null) {
+                val b = (persistentElem as? JsonPrimitive)?.booleanOrNull
+                if (b == null) {
+                    out += Finding(
+                        rule = "SM076",
+                        severity = Severity.ERROR,
+                        version = contract.id,
+                        file = file.physicalRelative,
+                        line = null,
+                        message = "Internal target '$name' field 'persistent' must be a boolean.",
+                    )
+                    false
+                } else {
+                    b
+                }
+            } else {
+                false
+            }
+
+            val clearElem = cfg["clear_color"]
+            if (clearElem != null) {
+                val validInt = (clearElem as? JsonPrimitive)?.intOrNull != null
+                val validArr = (clearElem as? JsonArray)?.let { arr ->
+                    arr.size == 4 && arr.all { (it as? JsonPrimitive)?.doubleOrNull != null }
+                } == true
+                if (!validInt && !validArr) {
+                    out += Finding(
+                        rule = "SM076",
+                        severity = Severity.ERROR,
+                        version = contract.id,
+                        file = file.physicalRelative,
+                        line = null,
+                        message = "Internal target '$name' has invalid 'clear_color'; expected a packed ARGB integer or 4-element [r, g, b, a] float array.",
+                    )
+                }
+            }
+
+            val rawFormat = ((cfg["format"] ?: cfg["pixel_format"]) as? JsonPrimitive)?.takeIf { it.isString }?.content
+            val normFormat = rawFormat?.trim()?.uppercase() ?: "RGBA8"
+            val family = classifyTargetFormat(normFormat)
+            if (family == null) {
+                out += Finding(
+                    rule = "SM076",
+                    severity = Severity.ERROR,
+                    version = contract.id,
+                    file = file.physicalRelative,
+                    line = null,
+                    message = "Internal target '$name' declares unknown texture format '$rawFormat'. Known formats: ${KNOWN_TARGET_FORMATS.keys.joinToString(", ")}.",
+                )
+                result[name] = TargetSpec(name, persistent, normFormat, TargetFormatFamily.FLOAT)
+            } else {
+                result[name] = TargetSpec(name, persistent, normFormat, family)
+            }
+        }
+        return result
+    }
+
+    private fun checkSamplerFormatCompatibility(
+        file: PackFile,
+        passLabel: String,
+        inputTarget: String,
+        formatLabel: String,
+        family: TargetFormatFamily,
+        bilinear: Boolean,
+        sampler: DeclaredSampler,
+        out: MutableList<Finding>,
+    ) {
+        when (sampler.valueKind) {
+            SamplerValueKind.INT -> if (family != TargetFormatFamily.INT) {
+                out += Finding(
+                    rule = "SM069",
+                    severity = Severity.ERROR,
+                    version = contract.id,
+                    file = file.physicalRelative,
+                    line = null,
+                    message = "$passLabel binds $formatLabel target '$inputTarget' to signed integer '${sampler.type} ${sampler.name}', which requires a signed integer render target format (e.g. RGBA32I, R32I).",
+                )
+            }
+            SamplerValueKind.UINT -> if (family != TargetFormatFamily.UINT) {
+                out += Finding(
+                    rule = "SM069",
+                    severity = Severity.ERROR,
+                    version = contract.id,
+                    file = file.physicalRelative,
+                    line = null,
+                    message = "$passLabel binds $formatLabel target '$inputTarget' to unsigned integer '${sampler.type} ${sampler.name}', which requires an unsigned integer render target format (e.g. RGBA32UI, R32UI).",
+                )
+            }
+            SamplerValueKind.SHADOW -> if (family != TargetFormatFamily.DEPTH) {
+                out += Finding(
+                    rule = "SM069",
+                    severity = Severity.ERROR,
+                    version = contract.id,
+                    file = file.physicalRelative,
+                    line = null,
+                    message = "$passLabel binds color target '$inputTarget' ($formatLabel) to depth-comparison '${sampler.type} ${sampler.name}' without 'use_depth_buffer: true' or a depth format.",
+                )
+            }
+            SamplerValueKind.FLOAT -> {
+                if (family == TargetFormatFamily.INT || family == TargetFormatFamily.UINT) {
+                    val expectedSampler = if (family == TargetFormatFamily.INT) "isampler2D" else "usampler2D"
+                    out += Finding(
+                        rule = "SM069",
+                        severity = Severity.ERROR,
+                        version = contract.id,
+                        file = file.physicalRelative,
+                        line = null,
+                        message = "$passLabel binds integer render target '$inputTarget' ($formatLabel) to floating-point '${sampler.type} ${sampler.name}'; declare '$expectedSampler ${sampler.name}' or use a normalized/float target format.",
+                    )
+                } else if (family == TargetFormatFamily.DEPTH && bilinear) {
+                    out += Finding(
+                        rule = "SM069",
+                        severity = Severity.WARNING,
+                        version = contract.id,
+                        file = file.physicalRelative,
+                        line = null,
+                        message = "$passLabel samples depth attachment '$inputTarget' via '${sampler.type} ${sampler.name}' with 'bilinear: true'; linear filtering of non-linear hardware depth values distorts reconstructed positions.",
+                    )
+                }
+            }
+        }
+    }
+
+    private fun classifyTargetFormat(format: String): TargetFormatFamily? = KNOWN_TARGET_FORMATS[format]
 
     private fun checkPostPassVertexShader(
         file: PackFile,
@@ -639,7 +1005,11 @@ class ContractChecker(private val contract: VersionContract) {
 
     private data class TransitiveGlslContract(
         val samplers: Set<String>,
+        val declaredSamplers: Map<String, DeclaredSampler>,
         val blocks: Map<String, List<BlockMember>>,
+        val structs: Map<String, GlslStruct>,
+        val extensions: Set<String>,
+        val includeTargets: Set<String>,
     )
 
     private fun collectTransitiveGlsl(
@@ -647,21 +1017,32 @@ class ContractChecker(private val contract: VersionContract) {
         glslByPath: Map<String, GlslSource>,
     ): TransitiveGlslContract {
         val samplers = linkedSetOf<String>()
+        val declaredSamplers = linkedMapOf<String, DeclaredSampler>()
         val blocks = linkedMapOf<String, List<BlockMember>>()
+        val structs = linkedMapOf<String, GlslStruct>()
+        val extensions = linkedSetOf<String>()
+        val includeTargets = linkedSetOf<String>()
         val visited = mutableSetOf<String>()
 
         fun visit(path: String) {
             if (!visited.add(path)) return
             val src = glslByPath[path] ?: return
             samplers += src.samplers
+            src.declaredSamplers.forEach { declaredSamplers[it.name] = it }
             src.blocks.forEach { blocks[it.name] = it.members }
+            src.structs.forEach { structs[it.name] = it }
+            src.extensions.filter { it.behavior in setOf("require", "enable", "warn") }.forEach { extensions += it.name }
             src.includes.forEach { inc ->
-                resolveIncludePath(path, inc.target, glslByPath.keys)?.let { visit(it) }
+                includeTargets += inc.target
+                resolveIncludePath(path, inc.target, glslByPath.keys)?.let { resolved ->
+                    includeTargets += resolved
+                    visit(resolved)
+                }
             }
         }
 
         visit(rootLogicalPath)
-        return TransitiveGlslContract(samplers, blocks)
+        return TransitiveGlslContract(samplers, declaredSamplers, blocks, structs, extensions, includeTargets)
     }
 
     private fun isExternalTarget(target: String, externalTargets: Set<String>): Boolean =
@@ -755,6 +1136,49 @@ class ContractChecker(private val contract: VersionContract) {
             "minecraft:core/screenquad",
             "minecraft:post/screenquad",
             "minecraft:post/blit",
+        )
+        private val KNOWN_TARGET_FORMATS: Map<String, TargetFormatFamily> = mapOf(
+            "RGBA8" to TargetFormatFamily.FLOAT,
+            "RGB8" to TargetFormatFamily.FLOAT,
+            "SRGB8_ALPHA8" to TargetFormatFamily.FLOAT,
+            "R8" to TargetFormatFamily.FLOAT,
+            "RG8" to TargetFormatFamily.FLOAT,
+            "R16" to TargetFormatFamily.FLOAT,
+            "RG16" to TargetFormatFamily.FLOAT,
+            "RGBA16" to TargetFormatFamily.FLOAT,
+            "R16F" to TargetFormatFamily.FLOAT,
+            "RG16F" to TargetFormatFamily.FLOAT,
+            "RGBA16F" to TargetFormatFamily.FLOAT,
+            "R32F" to TargetFormatFamily.FLOAT,
+            "RG32F" to TargetFormatFamily.FLOAT,
+            "RGBA32F" to TargetFormatFamily.FLOAT,
+            "R11F_G11F_B10F" to TargetFormatFamily.FLOAT,
+            "RGB10_A2" to TargetFormatFamily.FLOAT,
+            "R8I" to TargetFormatFamily.INT,
+            "R16I" to TargetFormatFamily.INT,
+            "R32I" to TargetFormatFamily.INT,
+            "RG8I" to TargetFormatFamily.INT,
+            "RG16I" to TargetFormatFamily.INT,
+            "RG32I" to TargetFormatFamily.INT,
+            "RGBA8I" to TargetFormatFamily.INT,
+            "RGBA16I" to TargetFormatFamily.INT,
+            "RGBA32I" to TargetFormatFamily.INT,
+            "R8UI" to TargetFormatFamily.UINT,
+            "R16UI" to TargetFormatFamily.UINT,
+            "R32UI" to TargetFormatFamily.UINT,
+            "RG8UI" to TargetFormatFamily.UINT,
+            "RG16UI" to TargetFormatFamily.UINT,
+            "RG32UI" to TargetFormatFamily.UINT,
+            "RGBA8UI" to TargetFormatFamily.UINT,
+            "RGBA16UI" to TargetFormatFamily.UINT,
+            "RGBA32UI" to TargetFormatFamily.UINT,
+            "DEPTH_COMPONENT" to TargetFormatFamily.DEPTH,
+            "DEPTH_COMPONENT16" to TargetFormatFamily.DEPTH,
+            "DEPTH_COMPONENT24" to TargetFormatFamily.DEPTH,
+            "DEPTH_COMPONENT32F" to TargetFormatFamily.DEPTH,
+            "DEPTH24_STENCIL8" to TargetFormatFamily.DEPTH,
+            "DEPTH32F" to TargetFormatFamily.DEPTH,
+            "DEPTH32F_STENCIL8" to TargetFormatFamily.DEPTH,
         )
     }
 }

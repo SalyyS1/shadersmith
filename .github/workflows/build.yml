@@ -75,6 +75,8 @@ jobs:
           test -f /tmp/fx/assets/cifx/shaders/post/vignette.fsh
           test -f /tmp/fx/assets/minecraft/post_effect/end_of_frame.json
           java -jar "$JAR" check /tmp/fx --mc 26.3
+          java -jar "$JAR" layout /tmp/fx --mc 26.3 --json | jq -e 'length >= 1'
+          java -jar "$JAR" pipeline src/test/resources/oldpack --mc 26.3 --json | jq -e 'length >= 1'
 
       - uses: actions/upload-artifact@v5
         if: always()
