@@ -30,6 +30,10 @@ inputs:
     description: 'Treat warnings as errors (true/false)'
     required: false
     default: 'false'
+  spirv:
+    description: 'Enforce Vulkan/Metal SPIR-V intermediate representation contracts (true/false)'
+    required: false
+    default: 'false'
   fail-on-error:
     description: 'Exit non-zero when shader contract findings fail validation (true/false)'
     required: false
@@ -37,7 +41,7 @@ inputs:
   version:
     description: 'ShaderSmith release tag to download'
     required: false
-    default: 'v0.4.0'
+    default: 'v0.5.0'
 
 outputs:
   sarif-file:
@@ -77,6 +81,7 @@ runs:
         INPUT_SARIF: ${{ inputs.sarif }}
         INPUT_JSON: ${{ inputs.json }}
         INPUT_STRICT: ${{ inputs.strict }}
+        INPUT_SPIRV: ${{ inputs.spirv }}
         INPUT_FAIL_ON_ERROR: ${{ inputs.fail-on-error }}
       run: |
         set -euo pipefail
@@ -91,6 +96,9 @@ runs:
         fi
         if [ "${INPUT_STRICT}" = "true" ]; then
           ARGS+=("--strict")
+        fi
+        if [ "${INPUT_SPIRV}" = "true" ]; then
+          ARGS+=("--spirv")
         fi
         if [ -n "${INPUT_SARIF}" ]; then
           ARGS+=("--sarif" "${INPUT_SARIF}")

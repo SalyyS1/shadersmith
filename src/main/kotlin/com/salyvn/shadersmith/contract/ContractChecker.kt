@@ -845,6 +845,18 @@ class ContractChecker(private val contract: VersionContract) {
                 result[name] = TargetSpec(name, persistent, normFormat, TargetFormatFamily.FLOAT)
             } else {
                 result[name] = TargetSpec(name, persistent, normFormat, family)
+                val isOitTarget = name.startsWith("oit_") || name.contains("transmittance") || name.contains("accumulate") || name.contains("moments")
+                val isOitFloatPrecision = normFormat in setOf("RGBA16F", "RGBA32F", "RG16F", "R16F", "R32F", "RG32F", "R11F_G11F_B10F")
+                if (isOitTarget && !isOitFloatPrecision) {
+                    out += Finding(
+                        rule = "SM056",
+                        severity = Severity.WARNING,
+                        version = contract.id,
+                        file = file.physicalRelative,
+                        line = null,
+                        message = "Wavelet OIT target '$name' uses non-floating-point or 8-bit format '$normFormat'. Transmittance estimation and moment accumulation require 16-bit or 32-bit floating-point textures (e.g. 'rgba16f', 'rgba32f'); 8-bit integer formats cause severe transmittance quantization banding and moment collapse.",
+                    )
+                }
             }
         }
         return result

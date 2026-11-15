@@ -315,6 +315,66 @@ object SsboValidator {
         val seenSsboBindings = mutableMapOf<Int, BufferBlockDecl>()
         var reportedMissingSsboExt = false
 
+        // Compute shader workgroup size check (SM046)
+        val isCompute = file.fileName.endsWith(".csh") || source.computeWorkgroup != null
+        if (file.fileName.endsWith(".csh") && source.computeWorkgroup == null) {
+            out += Finding(
+                rule = "SM046",
+                severity = Severity.ERROR,
+                version = versionId,
+                file = file.physicalRelative,
+                line = 1,
+                message = "Compute shader '${file.fileName}' lacks required 'layout(local_size_x = ...) in;' workgroup size declaration.",
+            )
+        } else if (source.computeWorkgroup != null) {
+            val cw = source.computeWorkgroup!!
+            val x = cw.x ?: 1
+            val y = cw.y ?: 1
+            val z = cw.z ?: 1
+            if (x <= 0 || y <= 0 || z <= 0) {
+                out += Finding(
+                    rule = "SM046",
+                    severity = Severity.ERROR,
+                    version = versionId,
+                    file = file.physicalRelative,
+                    line = cw.line,
+                    message = "Compute shader local_size dimension ($x, $y, $z) must be positive non-zero integer.",
+                )
+            } else if (x > 1024 || y > 1024 || z > 64) {
+                out += Finding(
+                    rule = "SM046",
+                    severity = Severity.ERROR,
+                    version = versionId,
+                    file = file.physicalRelative,
+                    line = cw.line,
+                    message = "Compute shader local workgroup dimension ($x, $y, $z) exceeds guaranteed GLSL limits (max local_size_x=1024, local_size_y=1024, local_size_z=64).",
+                )
+            } else if (x.toLong() * y * z > 1024) {
+                out += Finding(
+                    rule = "SM046",
+                    severity = Severity.ERROR,
+                    version = versionId,
+                    file = file.physicalRelative,
+                    line = cw.line,
+                    message = "Total compute workgroup invocations (${x * y * z}) exceeds maximum guaranteed GL_MAX_COMPUTE_WORK_GROUP_INVOCATIONS limit of 1024.",
+                )
+            }
+        }
+
+        // Divergent control flow barrier hazard (SM047)
+        for (call in source.barrierCalls) {
+            if (call.isInsideConditionalBranch && (call.functionName == "barrier" || call.functionName == "groupMemoryBarrier")) {
+                out += Finding(
+                    rule = "SM047",
+                    severity = Severity.ERROR,
+                    version = versionId,
+                    file = file.physicalRelative,
+                    line = call.line,
+                    message = "Compute shader divergent barrier hazard: '${call.functionName}()' called inside conditional flow control branch. Khronos GLSL forbids barrier execution in divergent branches because all invocations in the workgroup must enter the barrier.",
+                )
+            }
+        }
+
         for (block in source.bufferBlocks) {
             if (block.storage == BufferStorageKind.UNIFORM) {
                 if (block.explicitPacking == "std430") {
@@ -409,6 +469,55 @@ object SsboValidator {
                             message = "SSBO '${block.name}' member '${layoutMem.type} ${layoutMem.name}' at byte offset ${layoutMem.offset} triggers the std430 vec3 alignment trap ($strideInfo). Host buffers packing 12-byte float3 triples without 16-byte alignment or vec4 padding will read shifted garbage.",
                         )
                     }
+                }
+            }
+        }
+
+        // SSBO memory barrier and non-coherent atomic hazard (SM048)
+        val code = source.executableCode
+        val codeWithoutAtomics = code.replace(Regex("\\batomic(?:Add|Min|Max|And|Or|Xor|Exchange|CompSwap)\\s*\\([^)]*\\)"), " ")
+        val hasAnyBarrier = source.barrierCalls.isNotEmpty()
+        for (block in source.bufferBlocks.filter { it.storage == BufferStorageKind.BUFFER }) {
+            val anyAtomicOnBlock = block.members.any { mem ->
+                val targetExpr = if (block.instanceName != null) {
+                    "${Regex.escape(block.instanceName)}(?:\\s*\\[[^\\]]*\\])*\\s*\\.\\s*${Regex.escape(mem.name)}"
+                } else Regex.escape(mem.name)
+                val atomicRe = Regex("\\batomic(?:Add|Min|Max|And|Or|Xor|Exchange|CompSwap)\\s*\\(\\s*(?:$targetExpr)(?:\\s*\\[[^\\]]*\\])*\\b")
+                atomicRe.containsMatchIn(code)
+            }
+            if (anyAtomicOnBlock && "coherent" !in block.memoryQualifiers) {
+                out += Finding(
+                    rule = "SM048",
+                    severity = Severity.ERROR,
+                    version = versionId,
+                    file = file.physicalRelative,
+                    line = block.line,
+                    message = "Atomic operation on SSBO '${block.name}' requires the 'coherent' memory qualifier for guaranteed cross-invocation memory visibility.",
+                )
+            }
+
+            if (isCompute && !hasAnyBarrier) {
+                val anyMemberMutated = block.members.any { mem ->
+                    val targetExpr = if (block.instanceName != null) {
+                        "${Regex.escape(block.instanceName)}(?:\\s*\\[[^\\]]*\\])*\\s*\\.\\s*${Regex.escape(mem.name)}"
+                    } else Regex.escape(mem.name)
+                    isMutatedInCode(codeWithoutAtomics, targetExpr)
+                }
+                val anyMemberRead = block.members.any { mem ->
+                    val targetExpr = if (block.instanceName != null) {
+                        "${Regex.escape(block.instanceName)}(?:\\s*\\[[^\\]]*\\])*\\s*\\.\\s*${Regex.escape(mem.name)}"
+                    } else Regex.escape(mem.name)
+                    isReadInCode(codeWithoutAtomics, targetExpr)
+                }
+                if (anyMemberMutated && anyMemberRead) {
+                    out += Finding(
+                        rule = "SM048",
+                        severity = Severity.ERROR,
+                        version = versionId,
+                        file = file.physicalRelative,
+                        line = block.line,
+                        message = "SSBO '${block.name}' has both writes and reads in compute shader '${file.fileName}' without any memory barrier (barrier(), groupMemoryBarrier(), or memoryBarrierBuffer()), creating a read-after-write race condition across workgroup invocations.",
+                    )
                 }
             }
         }

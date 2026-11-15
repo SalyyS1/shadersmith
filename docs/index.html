@@ -3,8 +3,8 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>shadersmith v0.4.0 | Minecraft GLSL, SSBO Layout, Pipeline &amp; Post-Effect Auditor</title>
-  <meta name="description" content="Zero-upload browser GLSL shader contract auditor, std140/std430 SSBO byte-offset calculator, Minecraft 26.3 Wavelet OIT pipeline linker, pack.mcmeta overlay resolver, and migrator for 1.21.4 through 26.3.">
+  <title>shadersmith v0.5.0 | Minecraft GLSL, Compute Barrier, OIT &amp; SPIR-V Auditor</title>
+  <meta name="description" content="Zero-upload browser GLSL shader contract auditor, std140/std430 SSBO byte-offset calculator, compute barrier validator, Minecraft 26.3 Wavelet OIT pipeline linker, and Vulkan/Metal SPIR-V readiness inspector.">
   <style>
     :root {
       --bg: #0b0f17;
@@ -304,10 +304,10 @@
 <div class="wrap">
   <header>
     <div>
-      <h1>shadersmith <span class="tag">v0.4.0</span></h1>
+      <h1>shadersmith <span class="tag">v0.5.0</span></h1>
       <p class="subtitle">
         Zero-upload client-side Minecraft GLSL shader contract auditor, <code>std140</code>/<code>std430</code> SSBO layout verifier,
-        26.3 Wavelet OIT pipeline state compiler, multi-pass texture format validator, and mechanical migrator (1.21.4 through 26.3).
+        compute shader barrier validator, 26.3 Wavelet OIT pipeline state compiler, Vulkan/Metal SPIR-V readiness checker, and mechanical migrator (1.21.4 through 26.3).
       </p>
     </div>
     <div class="nav-links">
@@ -406,7 +406,7 @@
 
   <footer>
     <span>Apache-2.0 License | Built by <a href="https://github.com/SalyyS1">SalyyS1</a></span>
-    <span>CLI &amp; GitHub Action: <code>uses: SalyyS1/shadersmith@v0.4.0</code></span>
+    <span>CLI &amp; GitHub Action: <code>uses: SalyyS1/shadersmith@v0.5.0</code></span>
   </footer>
 </div>
 
@@ -433,8 +433,22 @@
     SM033: ["CircularIncludeChain", "Circular GLSL #include / #moj_import dependency chain", "error"],
     SM040: ["UniformBlockMemberOrderMismatch", "Positional std140 uniform block members are out of order", "error"],
     SM041: ["UniformBlockSchemaMismatch", "Positional std140 uniform block members differ from vanilla contract", "error"],
+    SM042: ["InvalidSsboLayoutOrDialect", "GLSL std430 or shader storage buffer violates OpenGL dialect/extension rules", "error"],
+    SM043: ["InvalidSsboUnsizedArrayOrBinding", "SSBO unsized runtime array placement or buffer binding index is invalid", "error"],
+    SM044: ["SsboQualifierAccessConflict", "Shader reads writeonly SSBO or mutates readonly SSBO member", "error"],
+    SM045: ["Std430Vec3PaddingHazard", "SSBO std430 vec3 array or struct tail introduces 4-byte alignment padding trap", "warning"],
+    SM046: ["InvalidComputeWorkgroupLayout", "Compute shader local workgroup dimensions missing, zero, or exceeding hardware limit", "error"],
+    SM047: ["DivergentComputeBarrierHazard", "barrier() or groupMemoryBarrier() invoked inside conditional flow control branch", "error"],
+    SM048: ["SsboMemoryBarrierHazard", "SSBO or shared memory read-after-write hazard without memory barrier or non-coherent atomic operation", "error"],
     SM050: ["MissingInterfaceLayoutLocation", "File-scope in/out variable lacks explicit layout(location = N) on 26.3+", "error"],
     SM051: ["LegacyGlVertexId", "Shader uses legacy gl_VertexID instead of gl_VertexIndex on 26.3+", "error"],
+    SM052: ["CrossStageInterfaceMismatch", "Paired vertex and fragment shaders disagree on layout(location = N) type or interpolation", "error"],
+    SM053: ["InvalidInterfaceLocationOrInterpolation", "Duplicate interface location, out-of-range slot, or non-flat integer fragment input", "error"],
+    SM054: ["OitPipelineStateConflict", "Minecraft 26.3 Wavelet OIT pipeline state attachment conflict or unhooked override", "error"],
+    SM055: ["WaveletOitPermutationConflict", "Minecraft 26.3 Wavelet OIT permutation phase attachment conflict or missing required depth bounds", "error"],
+    SM056: ["WaveletOitAttachmentFormatMismatch", "Wavelet OIT transmittance accumulation target uses non-floating-point texture format", "warning"],
+    SM057: ["SpirvDialectViolation", "Shader uses deprecated legacy GLSL built-in or naked file-scope uniform targeting SPIR-V", "error"],
+    SM058: ["SpirvInterfaceLocationOrBindingMissing", "SPIR-V target missing stage interface layout location or descriptor binding", "error"],
     SM060: ["LegacyPostEffectProgramPass", "Post-effect pass uses pre-1.21.5 program key instead of direct shaders", "error"],
     SM061: ["LegacyPostEffectUniformList", "Post-effect pass uses 1.21.5 list uniforms instead of uniform-block map", "error"],
     SM062: ["StalePostPassVertexShader", "Post-effect pass references a missing or outdated vanilla vertex shader", "warning"],
@@ -444,12 +458,14 @@
     SM066: ["PostPassSamplerMismatch", "Post-effect pass inputs and shader uniform sampler declarations disagree", "error"],
     SM067: ["PostPassUniformBlockMismatch", "Post-effect pass uniform block values disagree with shader std140 layout", "error"],
     SM068: ["MalformedPostEffectJson", "Post-effect JSON file cannot be parsed", "error"],
+    SM069: ["PostPassTextureFormatOrFeedbackError", "Post-effect pass has a read/write feedback loop or incompatible texture format/sampler binding", "error"],
     SM070: ["UnreadablePackMcmeta", "pack.mcmeta is unreadable or lacks a pack object", "error"],
     SM071: ["MissingPackFormat", "pack.mcmeta declares no pack format", "error"],
     SM072: ["PackFormatRangeMismatch", "Target Minecraft pack format falls outside pack.mcmeta declared range", "warning"],
     SM073: ["MissingMinMaxFormat", "Pack targeting format > 64 lacks min_format and max_format", "error"],
     SM074: ["EmptyOrMissingOverlayDirectory", "pack.mcmeta overlay entry points to a missing or empty directory", "warning"],
-    SM075: ["InvalidPackMcmetaOverlayOrRange", "pack.mcmeta contains inverted format bounds or invalid overlay directory name", "error"]
+    SM075: ["InvalidPackMcmetaOverlayOrRange", "pack.mcmeta contains inverted format bounds or invalid overlay directory name", "error"],
+    SM076: ["InvalidOrUnusedPostTargetConfig", "Post-effect internal target or texture input has invalid metadata or is never sampled", "warning"]
   };
 
   let packFiles = {};

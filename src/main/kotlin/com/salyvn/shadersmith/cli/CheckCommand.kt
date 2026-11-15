@@ -8,13 +8,16 @@ import com.github.ajalt.clikt.parameters.options.option
 import com.github.ajalt.clikt.parameters.types.choice
 import com.github.ajalt.clikt.parameters.types.path
 import com.salyvn.shadersmith.contract.ContractChecker
+import com.salyvn.shadersmith.contract.PackMetaReader
 import com.salyvn.shadersmith.contract.VersionContract
+import com.salyvn.shadersmith.pack.GlslSource
 import com.salyvn.shadersmith.pack.PackSource
 import com.salyvn.shadersmith.report.ConsoleReporter
 import com.salyvn.shadersmith.report.Finding
 import com.salyvn.shadersmith.report.JsonReporter
 import com.salyvn.shadersmith.report.SarifReporter
 import com.salyvn.shadersmith.report.Severity
+import com.salyvn.shadersmith.spirv.SpirvValidator
 import java.nio.file.Files
 
 /**
@@ -40,6 +43,8 @@ class CheckCommand : ShadersmithCommand(name = "check") {
 
     private val warningsAsErrors by option("--strict", help = "Exit 1 on warnings too").flag()
 
+    private val spirv by option("--spirv", help = "Also enforce Vulkan / Metal SPIR-V intermediate representation contracts").flag()
+
     override fun execute() {
         if (json && format != null && format != "json") {
             fail("Cannot combine --json with --format $format.")
@@ -52,7 +57,18 @@ class CheckCommand : ShadersmithCommand(name = "check") {
 
         val source = PackSource.read(pack)
         val versions = targets()
-        val findings = versions.flatMap { contract -> ContractChecker(contract).check(source) }
+        val findings = versions.flatMap { contract ->
+            val baseFindings = ContractChecker(contract).check(source).toMutableList()
+            if (spirv) {
+                val overlays = source.packMeta?.let { PackMetaReader.read(it.text)?.overlays } ?: emptyList()
+                val effective = source.effectiveFiles(contract.packFormat, overlays)
+                effective.filter { it.isShaderSource }.forEach { file ->
+                    val src = GlslSource(file.text)
+                    SpirvValidator.checkFile(file, src, contract.id, baseFindings)
+                }
+            }
+            baseFindings.sortedWith(compareBy({ it.severity.ordinal }, { it.file }, { it.line ?: 0 }))
+        }
 
         when (effectiveFormat) {
             "json" -> echo(JsonReporter.render(findings).trimEnd())

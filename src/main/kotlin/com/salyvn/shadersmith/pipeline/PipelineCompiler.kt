@@ -165,6 +165,38 @@ object PipelineCompiler {
                         message = "Fragment output '${collidingOut.name}' at layout(location = 0) is active during OIT_ALPHA_ONLY passes, colliding with <minecraft:oit.glsl> depth-bounds and transmittance attachments on ${contract.id}. Wrap '${collidingOut.name}' in '#ifndef OIT_ALPHA_ONLY'.",
                     )
                 }
+
+                // 3. Wavelet OIT permutation phase attachment conflict & transmittance/depth checks (SM055)
+                val oitTransmittanceDefines = setOf("OIT", "OIT_TRANSMITTANCE")
+                val transOut = explicitVars.firstOrNull { v ->
+                    v.direction == IoDirection.OUT &&
+                        v.location == 0 &&
+                        isGuardActiveUnderDefines(v.guard, oitTransmittanceDefines)
+                }
+                if (transOut != null && transOut.type != "vec4" && !transOut.type.startsWith("vec4[")) {
+                    out += Finding(
+                        rule = "SM055",
+                        severity = Severity.ERROR,
+                        version = contract.id,
+                        file = file.physicalRelative,
+                        line = transOut.line,
+                        message = "Fragment output '${transOut.name}' at layout(location = 0) has type '${transOut.type}' during OIT_TRANSMITTANCE; Minecraft 26.3 Wavelet OIT transmittance estimation requires vec4[2] or vec4 moment outputs.",
+                    )
+                }
+
+                if (source.executableCode.contains("gl_FragDepth") &&
+                    !transitiveIncludes.any { it.contains("oit_depth_bounds.glsl") } &&
+                    !source.executableCode.contains("DEPTH_BOUNDS_ACCURATE")
+                ) {
+                    out += Finding(
+                        rule = "SM055",
+                        severity = Severity.WARNING,
+                        version = contract.id,
+                        file = file.physicalRelative,
+                        line = null,
+                        message = "Wavelet OIT fragment shader mutates gl_FragDepth without including <minecraft:oit_depth_bounds.glsl> or defining DEPTH_BOUNDS_ACCURATE; custom depth will cause conservative depth-bounds culling to prematurely clip translucent geometry.",
+                    )
+                }
             } else if (file.namespace == "minecraft" && file.shaderDirectory == "core" && file.fileName in VANILLA_26_3_OIT_FRAGMENT_SHADERS) {
                 out += Finding(
                     rule = "SM054",

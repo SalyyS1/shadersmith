@@ -80,44 +80,49 @@ Every contract entry was generated directly from vanilla shader metadata on both
 | `SM020`..`SM022` | Error / Warning | Disallowed `#version` in GLSL includes (26.3+), missing `#version`, or mismatched GLSL dialect |
 | `SM030`..`SM033` | Error | Wrong `#moj_import`/`#include` directive, missing `minecraft:` or custom `<ns:file.glsl>` include, or circular GLSL include dependency chain (`SM033`) |
 | `SM040`..`SM041` | Error | Positional `layout(std140) uniform` block member order or member schema mismatch against vanilla |
-| `SM042`..`SM045` | Error / Warning | Invalid `std430` on `uniform` block or SSBO missing `GL_ARB_shader_storage_buffer_object` (`SM042`), non-final unsized `[]` array or duplicate SSBO `binding` (`SM043`), `readonly`/`writeonly` buffer access conflict (`SM044`), or `std430` `vec3` 16-byte stride padding trap (`SM045`) |
+| `SM042`..`SM048` | Error / Warning | Invalid `std430` on `uniform` block or SSBO missing `GL_ARB_shader_storage_buffer_object` (`SM042`), non-final unsized `[]` array or duplicate SSBO `binding` (`SM043`), `readonly`/`writeonly` buffer access conflict (`SM044`), `std430` `vec3` 16-byte stride padding trap (`SM045`), invalid compute workgroup dimension or size bound (`SM046`), divergent compute barrier hazard inside conditional branch (`SM047`), or non-coherent SSBO atomic / missing memoryBarrierBuffer hazard (`SM048`) |
 | `SM050`..`SM051` | Error | Missing `layout(location = N)` qualifier (including `flat`/`smooth` qualifiers) or legacy `gl_VertexID` on 26.3+ |
-| `SM052`..`SM054` | Error / Note | Cross-stage `.vsh`/`.fsh` location type or interpolation mismatch (`SM052`), duplicate branch-active location or non-`flat` integer fragment input (`SM053`), or 26.3 Wavelet OIT `OIT_ALPHA_ONLY` attachment collision (`SM054`) |
+| `SM052`..`SM056` | Error / Warning / Note | Cross-stage `.vsh`/`.fsh` location type or interpolation mismatch (`SM052`), duplicate branch-active location or non-`flat` integer fragment input (`SM053`), 26.3 Wavelet OIT `OIT_ALPHA_ONLY` attachment collision (`SM054`), Wavelet OIT transmittance moment vector or depth permutation conflict (`SM055`), or Wavelet OIT transmittance target 8-bit format precision loss (`SM056`) |
+| `SM057`..`SM058` | Error / Warning | Vulkan / SPIR-V dialect violation and legacy OpenGL 1.x-2.x built-ins (`SM057`), or SPIR-V stage interface missing explicit layout location or descriptor binding (`SM058`) |
 | `SM060`..`SM064` | Error / Warning | Legacy post-effect pass schema, removed `transparency` chain, stale vanilla vertex shader, or missing custom/vanilla `.vsh`/`.fsh` source |
 | `SM065`..`SM069` | Error / Warning | Undeclared or read-before-write internal render target (`SM065`), unbound sampler vs pass `inputs` (`SM066`), pass `uniforms` vs shader `std140` layout mismatch (`SM067`), malformed `post_effect/*.json` (`SM068`), or same-pass read/write feedback loop & integer/depth texture format binding mismatch (`SM069`) |
 | `SM070`..`SM076` | Error / Warning | Unreadable `pack.mcmeta`, missing format fields, format range mismatch, missing `min_format`/`max_format` above 64, empty overlay directory, invalid overlay bounds (`SM075`), or invalid/unused post-effect render target & texture dimensions (`SM076`) |
 
 ## Getting Started
 
-Requires Java 21+. Download `shadersmith-0.4.0.jar` from [Releases](https://github.com/SalyyS1/shadersmith/releases).
+Requires Java 21+. Download `shadersmith-0.5.0.jar` from [Releases](https://github.com/SalyyS1/shadersmith/releases).
 
 ```sh
 # Validate one version or a multi-version release range (stacking active pack.mcmeta overlays per version)
-java -jar shadersmith-0.4.0.jar check pack/ --mc 26.3
-java -jar shadersmith-0.4.0.jar check pack.zip --mc-range 1.21.6..26.3
+java -jar shadersmith-0.5.0.jar check pack/ --mc 26.3
+java -jar shadersmith-0.5.0.jar check pack.zip --mc-range 1.21.6..26.3
+
+# Validate compute barrier hazards and SPIR-V cross-compilation readiness
+java -jar shadersmith-0.5.0.jar check pack/ --mc 26.3 --spirv
+java -jar shadersmith-0.5.0.jar spirv pack/ --strict
 
 # Compute exact Khronos std140 & std430 byte offsets, strides, struct alignments, and padding holes
-java -jar shadersmith-0.4.0.jar layout pack/ --mc 26.3
-java -jar shadersmith-0.4.0.jar layout shader.fsh --json
+java -jar shadersmith-0.5.0.jar layout pack/ --mc 26.3
+java -jar shadersmith-0.5.0.jar layout shader.fsh --json
 
 # Compile Minecraft 26.3 core shader pipeline state permutations and Wavelet OIT bindings
-java -jar shadersmith-0.4.0.jar pipeline pack/ --mc 26.3
-java -jar shadersmith-0.4.0.jar pipeline pack/ --mc 26.3 --program minecraft:entity --json
+java -jar shadersmith-0.5.0.jar pipeline pack/ --mc 26.3 --oit
+java -jar shadersmith-0.5.0.jar pipeline pack/ --mc 26.3 --program minecraft:entity --json
 
 # Emit OASIS SARIF v2.1.0 or JSON for CI
-java -jar shadersmith-0.4.0.jar check pack.zip --mc 26.3 --sarif shadersmith.sarif
-java -jar shadersmith-0.4.0.jar check pack.zip --mc 26.3 --format sarif > shadersmith.sarif
-java -jar shadersmith-0.4.0.jar check pack.zip --mc 26.3 --json > findings.json
+java -jar shadersmith-0.5.0.jar check pack.zip --mc 26.3 --sarif shadersmith.sarif
+java -jar shadersmith-0.5.0.jar check pack.zip --mc 26.3 --format sarif > shadersmith.sarif
+java -jar shadersmith-0.5.0.jar check pack.zip --mc 26.3 --json > findings.json
 
 # Preview unified diff, then migrate directory or .zip to a byte-deterministic .zip with SHA-1
-java -jar shadersmith-0.4.0.jar migrate pack.zip --to 26.3
-java -jar shadersmith-0.4.0.jar migrate pack.zip --to 26.3 --zip pack-26.3.zip
+java -jar shadersmith-0.5.0.jar migrate pack.zip --to 26.3
+java -jar shadersmith-0.5.0.jar migrate pack.zip --to 26.3 --zip pack-26.3.zip
 
 # Scaffold a 26.3+ custom post-effect with matched JSON + std140 uniform block
-java -jar shadersmith-0.4.0.jar new vignette --ns myfx --mc 26.3 --uniform Strength:float=0.6
+java -jar shadersmith-0.5.0.jar new vignette --ns myfx --mc 26.3 --uniform Strength:float=0.6
 
 # Inspect the extracted vanilla contract for any supported version or format tuple (e.g. 97.1)
-java -jar shadersmith-0.4.0.jar contract --mc 26.3
+java -jar shadersmith-0.5.0.jar contract --mc 26.3
 ```
 
 Exit code `1` means the pack has errors for the target version; `2` means invalid arguments or unreadable input.
@@ -141,10 +146,11 @@ Run `SalyyS1/shadersmith` in CI and upload findings directly to GitHub Security 
 ```yaml
 - name: Validate Resource Pack Shaders
   id: shaders
-  uses: SalyyS1/shadersmith@v0.4.0
+  uses: SalyyS1/shadersmith@v0.5.0
   with:
     pack: ./resourcepack
     mc: '26.3'
+    spirv: 'true'
     sarif: shadersmith.sarif
     fail-on-error: 'false'
 

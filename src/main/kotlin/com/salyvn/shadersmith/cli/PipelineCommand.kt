@@ -30,6 +30,10 @@ class PipelineCommand : ShadersmithCommand(name = "pipeline") {
 
     private val json by option("--json", help = "Emit compiled pipeline states as JSON").flag()
 
+    private val oit by option("--oit", help = "Filter for Wavelet OIT programs and permutation states").flag()
+
+    private val spirv by option("--spirv", help = "Display SPIR-V descriptor bindings and interface locations").flag()
+
     override fun execute() {
         val contract = dataset.resolve(mc ?: dataset.versions.last().id)
         val source = PackSource.read(pack)
@@ -37,13 +41,17 @@ class PipelineCommand : ShadersmithCommand(name = "pipeline") {
         val effective = source.effectiveFiles(contract.packFormat, overlays)
         val glslByPath = effective.filter { it.isShaderSource }.associate { it.relative to GlslSource(it.text) }
 
-        val compiled = PipelineCompiler.compilePrograms(effective, glslByPath, contract, program)
+        var compiled = PipelineCompiler.compilePrograms(effective, glslByPath, contract, program)
+        if (oit) {
+            compiled = compiled.filter { it.usesWaveletOit }
+        }
         if (json) {
             echo(PRETTY.encodeToString(compiled))
             return
         }
         if (compiled.isEmpty()) {
-            echo("No matching core shader programs found in $pack on ${contract.id}.")
+            val filterHint = if (oit) " with Wavelet OIT" else ""
+            echo("No matching core shader programs$filterHint found in $pack on ${contract.id}.")
             return
         }
 

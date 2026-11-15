@@ -11,6 +11,7 @@ import com.salyvn.shadersmith.cli.LayoutCommand
 import com.salyvn.shadersmith.cli.MigrateCommand
 import com.salyvn.shadersmith.cli.NewCommand
 import com.salyvn.shadersmith.cli.PipelineCommand
+import com.salyvn.shadersmith.cli.SpirvCommand
 import com.salyvn.shadersmith.core.BuildInfo
 
 /**
@@ -38,5 +39,6 @@ fun main(args: Array<String>) = ShadersmithCli()
         ContractCommand(),
         LayoutCommand(),
         PipelineCommand(),
+        SpirvCommand(),
     )
     .main(args)

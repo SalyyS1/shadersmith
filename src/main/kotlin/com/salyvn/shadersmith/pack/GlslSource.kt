@@ -66,7 +66,28 @@ data class DeclaredSampler(
     val type: String,
     val name: String,
     val valueKind: SamplerValueKind,
+    val binding: Int? = null,
     val line: Int,
+)
+
+data class ComputeWorkgroup(
+    val x: Int?,
+    val y: Int?,
+    val z: Int?,
+    val line: Int,
+)
+
+data class SharedVariable(
+    val type: String,
+    val name: String,
+    val arraySize: Int? = null,
+    val line: Int,
+)
+
+data class BarrierCall(
+    val functionName: String,
+    val line: Int,
+    val isInsideConditionalBranch: Boolean,
 )
 
 enum class IoDirection { IN, OUT }
@@ -175,20 +196,136 @@ class GlslSource(val text: String) {
     /** Detailed sampler declarations (`sampler2D`, `isampler2D`, `usampler2D`, `sampler2DShadow`, etc.). */
     val declaredSamplers: List<DeclaredSampler> by lazy {
         SAMPLER_TYPED.findAll(cleanText).map { match ->
-            val samplerType = match.groupValues[1]
-            val samplerName = match.groupValues[2]
+            val layoutPrefix = match.groupValues[1]
+            val samplerType = match.groupValues[2]
+            val samplerName = match.groupValues[3]
             val kind = when {
                 samplerType.endsWith("Shadow") -> SamplerValueKind.SHADOW
                 samplerType.startsWith("isampler") -> SamplerValueKind.INT
                 samplerType.startsWith("usampler") -> SamplerValueKind.UINT
                 else -> SamplerValueKind.FLOAT
             }
-            DeclaredSampler(samplerType, samplerName, kind, cleanText.lineNumberAt(match.range.first))
+            val binding = Regex("\\bbinding\\s*=\\s*(\\d+)").find(layoutPrefix)?.groupValues?.get(1)?.toIntOrNull()
+            DeclaredSampler(samplerType, samplerName, kind, binding, cleanText.lineNumberAt(match.range.first))
         }.toList()
     }
 
     /** `uniform [i|u]sampler* Name;` variable names outside comments. */
     val samplers: List<String> by lazy { declaredSamplers.map { it.name } }
+
+    /** Compute shader `layout(local_size_x = ...) in;` declaration if present. */
+    val computeWorkgroup: ComputeWorkgroup? by lazy {
+        cleanLines.withIndex().firstNotNullOfOrNull { (index, line) ->
+            val m = COMPUTE_LAYOUT.find(line) ?: return@firstNotNullOfOrNull null
+            val qualifiers = m.groupValues[1]
+            val x = Regex("\\blocal_size_x\\s*=\\s*(\\d+)").find(qualifiers)?.groupValues?.get(1)?.toIntOrNull()
+            val y = Regex("\\blocal_size_y\\s*=\\s*(\\d+)").find(qualifiers)?.groupValues?.get(1)?.toIntOrNull()
+            val z = Regex("\\blocal_size_z\\s*=\\s*(\\d+)").find(qualifiers)?.groupValues?.get(1)?.toIntOrNull()
+            if (x != null || y != null || z != null) {
+                ComputeWorkgroup(x, y, z, index + 1)
+            } else null
+        }
+    }
+
+    /** Workgroup shared memory variables (`shared uint cache[64];`). */
+    val sharedVariables: List<SharedVariable> by lazy {
+        SHARED_VAR.findAll(cleanText).map { match ->
+            val type = match.groupValues[1]
+            val name = match.groupValues[2]
+            val arrSize = match.groupValues[3].takeIf { it.isNotEmpty() }?.toIntOrNull()
+            SharedVariable(type, name, arrSize, cleanText.lineNumberAt(match.range.first))
+        }.toList()
+    }
+
+    /** All barrier calls (`barrier()`, `groupMemoryBarrier()`, etc.) and divergence flags. */
+    val barrierCalls: List<BarrierCall> by lazy { parseBarrierCalls() }
+
+    /** File-scope non-opaque uniforms outside blocks (`uniform vec4 ColorModulator;`). */
+    val nakedUniforms: List<Pair<String, Int>> by lazy {
+        NAKED_UNIFORM.findAll(cleanText).mapNotNull { match ->
+            val type = match.groupValues[1]
+            val name = match.groupValues[2]
+            "$type $name" to cleanText.lineNumberAt(match.range.first)
+        }.toList()
+    }
+
+    /** Usages of deprecated legacy GLSL built-ins (e.g. `gl_FragColor`, `attribute`, `varying`). */
+    val legacyBuiltinUsages: List<Pair<String, Int>> by lazy {
+        val results = mutableListOf<Pair<String, Int>>()
+        val legacyBuiltins = listOf(
+            "gl_FragColor", "gl_FragData", "attribute", "varying",
+            "gl_Normal", "gl_Vertex", "gl_MultiTexCoord0",
+            "gl_ModelViewMatrix", "gl_ProjectionMatrix", "gl_ModelViewProjectionMatrix", "gl_NormalMatrix"
+        )
+        for (builtin in legacyBuiltins) {
+            val re = Regex("\\b${Regex.escape(builtin)}\\b")
+            cleanLines.withIndex().forEach { (idx, line) ->
+                if (re.containsMatchIn(line)) {
+                    results += builtin to (idx + 1)
+                }
+            }
+        }
+        results
+    }
+
+    private fun parseBarrierCalls(): List<BarrierCall> {
+        val results = mutableListOf<BarrierCall>()
+        val barrierRe = Regex("\\b(barrier|groupMemoryBarrier|memoryBarrierBuffer|memoryBarrierShared|memoryBarrierImage|memoryBarrier)\\s*\\(\\s*\\)")
+
+        val conditionalScopes = mutableListOf<IntRange>()
+        val branchKeywordRe = Regex("\\b(if|else|switch|case|default|while|for)\\b")
+
+        for (match in branchKeywordRe.findAll(cleanText)) {
+            val kw = match.groupValues[1]
+            var idx = match.range.last + 1
+            val len = cleanText.length
+
+            if (kw in setOf("if", "switch", "while", "for")) {
+                while (idx < len && cleanText[idx].isWhitespace()) idx++
+                if (idx < len && cleanText[idx] == '(') {
+                    var parenDepth = 1
+                    idx++
+                    while (idx < len && parenDepth > 0) {
+                        if (cleanText[idx] == '(') parenDepth++
+                        else if (cleanText[idx] == ')') parenDepth--
+                        idx++
+                    }
+                }
+            } else if (kw in setOf("case", "default")) {
+                while (idx < len && cleanText[idx] != ':') idx++
+                if (idx < len && cleanText[idx] == ':') idx++
+            }
+
+            while (idx < len && cleanText[idx].isWhitespace()) idx++
+            if (idx >= len) continue
+
+            val bodyStart = idx
+            if (cleanText[idx] == '{') {
+                var braceDepth = 1
+                idx++
+                while (idx < len && braceDepth > 0) {
+                    if (cleanText[idx] == '{') braceDepth++
+                    else if (cleanText[idx] == '}') braceDepth--
+                    idx++
+                }
+                conditionalScopes += bodyStart until idx
+            } else {
+                while (idx < len && cleanText[idx] != ';' && cleanText[idx] != '}') idx++
+                if (idx < len && cleanText[idx] == ';') idx++
+                conditionalScopes += bodyStart until idx
+            }
+        }
+
+        for (match in barrierRe.findAll(cleanText)) {
+            val funcName = match.groupValues[1]
+            val offset = match.range.first
+            val line = cleanText.lineNumberAt(offset)
+            val isConditional = conditionalScopes.any { offset in it }
+            results += BarrierCall(funcName, line, isConditional)
+        }
+
+        return results
+    }
 
     fun hasExtensionEnabled(extensionName: String): Boolean =
         extensions.any { it.name == extensionName && it.behavior in ENABLED_BEHAVIORS }
@@ -556,7 +693,10 @@ class GlslSource(val text: String) {
         private val INCLUDE = Regex("^\\s*#(moj_import|include)\\s*[<\"]([^>\"]+)[>\"]")
         private val BARE_IO = Regex("^(?:(?:flat|smooth|noperspective|centroid)\\s+)*(in|out)\\s+\\w+\\s+\\w+\\s*;$")
         private val VERTEX_ID = Regex("\\bgl_VertexID\\b")
-        private val SAMPLER_TYPED = Regex("\\buniform\\s+([iu]?sampler\\w*)\\s+(\\w+)\\s*;")
+        private val SAMPLER_TYPED = Regex("((?:layout\\s*\\([^)]*\\)\\s*)?)\\buniform\\s+([iu]?sampler\\w*)\\s+(\\w+)\\s*;")
+        private val COMPUTE_LAYOUT = Regex("^\\s*layout\\s*\\(([^)]*)\\)\\s*in\\s*;")
+        private val SHARED_VAR = Regex("^\\s*shared\\s+([A-Za-z_]\\w*)\\s+([A-Za-z_]\\w*)(?:\\s*\\[\\s*(\\d+)?\\s*\\])?\\s*;", RegexOption.MULTILINE)
+        private val NAKED_UNIFORM = Regex("^(?:\\s*layout\\s*\\([^)]*\\)\\s*)?\\s*uniform\\s+(?!sampler|image|subpass|atomic_uint)([A-Za-z_]\\w*)\\s+([A-Za-z_]\\w*)\\s*;", RegexOption.MULTILINE)
         private val GLSL_IDENT = Regex("^[A-Za-z_]\\w*$")
         private val STRUCT_HEADER = Regex("^struct\\s+([A-Za-z_]\\w*)$")
         private val LAYOUT_QUALIFIER = Regex("\\blayout\\s*\\(([^)]*)\\)")
