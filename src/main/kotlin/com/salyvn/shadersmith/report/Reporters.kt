@@ -49,6 +49,7 @@ object RuleCatalog {
         RuleMeta("SM056", "WaveletOitAttachmentFormatMismatch", "Wavelet OIT transmittance accumulation target uses non-floating-point texture format", "warning"),
         RuleMeta("SM057", "SpirvDialectViolation", "Shader uses deprecated legacy GLSL built-in or naked file-scope uniform targeting SPIR-V", "error"),
         RuleMeta("SM058", "SpirvInterfaceLocationOrBindingMissing", "SPIR-V target missing stage interface layout location or descriptor binding", "error"),
+        RuleMeta("SM059", "DeadUniformOrSampler", "Shader declares a sampler uniform, file-scope uniform, or custom uniform block member never referenced in executable code", "warning"),
         RuleMeta("SM060", "LegacyPostEffectProgramPass", "Post-effect pass uses pre-1.21.5 'program' key instead of direct shaders", "error"),
         RuleMeta("SM061", "LegacyPostEffectUniformList", "Post-effect pass uses 1.21.5 list uniforms instead of uniform-block map", "error"),
         RuleMeta("SM062", "StalePostPassVertexShader", "Post-effect pass references a missing or outdated vanilla vertex shader", "warning"),
@@ -66,6 +67,12 @@ object RuleCatalog {
         RuleMeta("SM074", "EmptyOrMissingOverlayDirectory", "pack.mcmeta overlay entry points to a missing or empty directory", "warning"),
         RuleMeta("SM075", "InvalidPackMcmetaOverlayOrRange", "pack.mcmeta contains inverted format bounds or invalid overlay directory name", "error"),
         RuleMeta("SM076", "InvalidOrUnusedPostTargetConfig", "Post-effect internal target or texture input has invalid metadata or is never sampled", "warning"),
+        RuleMeta("SM077", "RegisterLiveRangePressure", "Shader function exceeds target temporary vector register live-range budget or dynamically indexes a local scratch array", "warning"),
+        RuleMeta("SM078", "DivergentDerivativeSample", "Fragment shader invokes implicit-LOD texture sampling or screen-space derivatives inside non-uniform conditional control flow", "warning"),
+        RuleMeta("SM079", "DeadLocalVariable", "Local variable inside a shader function is assigned and never read", "note"),
+        RuleMeta("SM080", "PostTargetOverwrittenBeforeRead", "Multi-pass post-effect overwrites an internal render target before an earlier pass write is sampled", "warning"),
+        RuleMeta("SM081", "DeadEndOrUninitializedPostChain", "Multi-pass post-effect never writes back to an external or persistent target, or samples an uninitialized persistent target", "warning"),
+        RuleMeta("SM082", "PostEffectVramBudgetExceeded", "Post-effect render-target allocation exceeds the configured VRAM ceiling", "warning"),
     ).associateBy { it.id }
 
     fun get(ruleId: String): RuleMeta = BY_ID[ruleId] ?: RuleMeta(

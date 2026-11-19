@@ -11,7 +11,9 @@ import com.salyvn.shadersmith.cli.LayoutCommand
 import com.salyvn.shadersmith.cli.MigrateCommand
 import com.salyvn.shadersmith.cli.NewCommand
 import com.salyvn.shadersmith.cli.PipelineCommand
+import com.salyvn.shadersmith.cli.PressureCommand
 import com.salyvn.shadersmith.cli.SpirvCommand
+import com.salyvn.shadersmith.cli.VramCommand
 import com.salyvn.shadersmith.core.BuildInfo
 
 /**
@@ -40,5 +42,7 @@ fun main(args: Array<String>) = ShadersmithCli()
         LayoutCommand(),
         PipelineCommand(),
         SpirvCommand(),
+        PressureCommand(),
+        VramCommand(),
     )
     .main(args)

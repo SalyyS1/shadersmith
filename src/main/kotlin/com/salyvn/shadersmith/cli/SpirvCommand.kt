@@ -53,7 +53,7 @@ class SpirvCommand : ShadersmithCommand(name = "spirv") {
                 target.fileName.toString().endsWith(".glsl"))
         ) {
             val text = Files.readString(target)
-            val file = PackFile(target.toString(), target.fileName.toString(), text)
+            val file = PackFile(relative = target.fileName.toString(), text = text, physicalRelative = target.toString())
             val src = GlslSource(text)
             val report = SpirvValidator.auditFile(file, src, contract.id)
             reports += report

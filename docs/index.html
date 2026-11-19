@@ -3,8 +3,8 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>shadersmith v0.5.0 | Minecraft GLSL, Compute Barrier, OIT &amp; SPIR-V Auditor</title>
-  <meta name="description" content="Zero-upload browser GLSL shader contract auditor, std140/std430 SSBO byte-offset calculator, compute barrier validator, Minecraft 26.3 Wavelet OIT pipeline linker, and Vulkan/Metal SPIR-V readiness inspector.">
+  <title>shadersmith v0.6.0 | Minecraft GLSL, Register Pressure, VRAM &amp; SPIR-V Auditor</title>
+  <meta name="description" content="Zero-upload browser GLSL shader contract auditor, dead-uniform and register live-range pressure analyzer, post-effect VRAM and ping-pong calculator, std140/std430 SSBO layout verifier, and Minecraft 26.3 Wavelet OIT pipeline linker.">
   <style>
     :root {
       --bg: #0b0f17;
@@ -304,10 +304,10 @@
 <div class="wrap">
   <header>
     <div>
-      <h1>shadersmith <span class="tag">v0.5.0</span></h1>
+      <h1>shadersmith <span class="tag">v0.6.0</span></h1>
       <p class="subtitle">
-        Zero-upload client-side Minecraft GLSL shader contract auditor, <code>std140</code>/<code>std430</code> SSBO layout verifier,
-        compute shader barrier validator, 26.3 Wavelet OIT pipeline state compiler, Vulkan/Metal SPIR-V readiness checker, and mechanical migrator (1.21.4 through 26.3).
+        Zero-upload client-side Minecraft GLSL shader contract auditor, dead-uniform &amp; register live-range pressure analyzer,
+        post-effect render-target VRAM &amp; ping-pong verifier, <code>std140</code>/<code>std430</code> SSBO calculator, 26.3 Wavelet OIT pipeline linker, and mechanical migrator (1.21.4 through 26.3).
       </p>
     </div>
     <div class="nav-links">
@@ -332,6 +332,7 @@
       <button class="btn" id="presetOverlayBtn" type="button">Preset: Dual-Era Overlay Pack</button>
       <button class="btn" id="presetPostFxBtn" type="button">Preset: Broken 26.3 Post-Effect</button>
       <button class="btn" id="presetSsboOitBtn" type="button">Preset: 26.3 SSBO, OIT &amp; Multi-Pass Format</button>
+      <button class="btn" id="presetV06Btn" type="button">Preset: v0.6 Register Pressure &amp; Ping-Pong VRAM</button>
     </div>
   </div>
 
@@ -343,6 +344,10 @@
     <label>
       <input type="checkbox" id="rangeCheck" checked>
       Evaluate full release matrix (1.21.4 .. 26.3)
+    </label>
+    <label>
+      <input type="checkbox" id="pressureCheck" checked>
+      Register pressure &amp; dead uniforms (SM059, SM077..SM079)
     </label>
     <button class="btn btn-primary" id="runCheckBtn" type="button">Audit Pack</button>
     <button class="btn" id="migrateBtn" type="button">Apply Mechanical Migration</button>
@@ -379,6 +384,14 @@
 
   <div class="card" style="margin-bottom: 20px;">
     <div class="card-head">
+      <span>GLSL Register Live-Range Pressure &amp; Post-Effect Render-Target VRAM / Aliasing Telemetry</span>
+      <span id="vramPressureSummary" style="font-family: var(--mono); font-size: 0.78rem; color: var(--muted);"></span>
+    </div>
+    <div class="std140-grid" id="vramPressureGrid"></div>
+  </div>
+
+  <div class="card" style="margin-bottom: 20px;">
+    <div class="card-head">
       <span>Custom GLSL <code>std140</code> vs <code>std430</code> SSBO Byte-Offset &amp; Stride Calculator</span>
       <span id="customLayoutSummary" style="font-family: var(--mono); font-size: 0.78rem; color: var(--muted);"></span>
     </div>
@@ -406,7 +419,7 @@
 
   <footer>
     <span>Apache-2.0 License | Built by <a href="https://github.com/SalyyS1">SalyyS1</a></span>
-    <span>CLI &amp; GitHub Action: <code>uses: SalyyS1/shadersmith@v0.5.0</code></span>
+    <span>CLI &amp; GitHub Action: <code>uses: SalyyS1/shadersmith@v0.6.0</code></span>
   </footer>
 </div>
 
@@ -449,6 +462,7 @@
     SM056: ["WaveletOitAttachmentFormatMismatch", "Wavelet OIT transmittance accumulation target uses non-floating-point texture format", "warning"],
     SM057: ["SpirvDialectViolation", "Shader uses deprecated legacy GLSL built-in or naked file-scope uniform targeting SPIR-V", "error"],
     SM058: ["SpirvInterfaceLocationOrBindingMissing", "SPIR-V target missing stage interface layout location or descriptor binding", "error"],
+    SM059: ["DeadUniformOrSampler", "Shader declares a sampler uniform, file-scope uniform, or custom uniform block member never referenced in executable code", "warning"],
     SM060: ["LegacyPostEffectProgramPass", "Post-effect pass uses pre-1.21.5 program key instead of direct shaders", "error"],
     SM061: ["LegacyPostEffectUniformList", "Post-effect pass uses 1.21.5 list uniforms instead of uniform-block map", "error"],
     SM062: ["StalePostPassVertexShader", "Post-effect pass references a missing or outdated vanilla vertex shader", "warning"],
@@ -465,7 +479,13 @@
     SM073: ["MissingMinMaxFormat", "Pack targeting format > 64 lacks min_format and max_format", "error"],
     SM074: ["EmptyOrMissingOverlayDirectory", "pack.mcmeta overlay entry points to a missing or empty directory", "warning"],
     SM075: ["InvalidPackMcmetaOverlayOrRange", "pack.mcmeta contains inverted format bounds or invalid overlay directory name", "error"],
-    SM076: ["InvalidOrUnusedPostTargetConfig", "Post-effect internal target or texture input has invalid metadata or is never sampled", "warning"]
+    SM076: ["InvalidOrUnusedPostTargetConfig", "Post-effect internal target or texture input has invalid metadata or is never sampled", "warning"],
+    SM077: ["RegisterLiveRangePressure", "Shader function exceeds target temporary vector register live-range budget or dynamically indexes a local scratch array", "warning"],
+    SM078: ["DivergentDerivativeSample", "Fragment shader invokes implicit-LOD texture sampling or screen-space derivatives inside non-uniform conditional control flow", "warning"],
+    SM079: ["DeadLocalVariable", "Local variable inside a shader function is assigned and never read", "note"],
+    SM080: ["PostTargetOverwrittenBeforeRead", "Multi-pass post-effect overwrites an internal render target before an earlier pass write is sampled", "warning"],
+    SM081: ["DeadEndOrUninitializedPostChain", "Multi-pass post-effect never writes back to an external or persistent target, or samples an uninitialized persistent target", "warning"],
+    SM082: ["PostEffectVramBudgetExceeded", "Post-effect render-target allocation exceeds the configured VRAM ceiling", "warning"]
   };
 
   let packFiles = {};
@@ -618,6 +638,109 @@
                   { name: "Tint", type: "vec3", value: [1.0, 0.2, 0.2] }
                 ]
               }
+            }
+          ]
+        }, null, 2) + "\n"
+      }
+    },
+    ssboOit: {
+      target: "26.3",
+      files: {
+        "pack.mcmeta": JSON.stringify({
+          pack: { description: "26.3 SSBO & Wavelet OIT Audit", min_format: [97, 0], max_format: [97, 1] }
+        }, null, 2) + "\n",
+        "assets/minecraft/shaders/core/entity.fsh": [
+          "#version 330",
+          "#include <minecraft:oit.glsl>",
+          "uniform sampler2D Sampler0;",
+          "layout(location = 0) in vec2 texCoord0;",
+          "layout(location = 0) out vec4 fragColor;",
+          "void main() {",
+          "    fragColor = texture(Sampler0, texCoord0);",
+          "}"
+        ].join("\n") + "\n",
+        "assets/myfx/post_effect/oit_chain.json": JSON.stringify({
+          targets: {
+            oit_transmittance: { format: "rgba8" },
+            swap: { format: "rgba16f" }
+          },
+          passes: [
+            {
+              vertex_shader: "minecraft:core/screenquad",
+              fragment_shader: "minecraft:post/blit",
+              inputs: [{ sampler_name: "In", target: "swap" }],
+              output: "swap"
+            }
+          ]
+        }, null, 2) + "\n"
+      }
+    },
+    v06: {
+      target: "26.3",
+      files: {
+        "pack.mcmeta": JSON.stringify({
+          pack: { description: "v0.6 Register Pressure & VRAM Ping-Pong", min_format: [97, 0], max_format: [97, 1] }
+        }, null, 2) + "\n",
+        "assets/myfx/shaders/post/bloom_pass.fsh": [
+          "#version 330",
+          "uniform sampler2D InSampler;",
+          "uniform sampler2D UnusedLutSampler;",
+          "layout(std140) uniform BloomParams {",
+          "    float Intensity;",
+          "    vec4 DeadTrailingTint;",
+          "};",
+          "layout(location = 0) in vec2 texCoord;",
+          "layout(location = 0) flat in int tapIndex;",
+          "layout(location = 0) out vec4 fragColor;",
+          "void main() {",
+          "    vec4 scratchTaps[8];",
+          "    scratchTaps[0] = vec4(Intensity);",
+          "    vec4 unusedTemp = vec4(1.0);",
+          "    vec4 acc = scratchTaps[tapIndex];",
+          "    if (texCoord.x > 0.5) {",
+          "        acc += texture(InSampler, texCoord);",
+          "    }",
+          "    fragColor = acc;",
+          "}"
+        ].join("\n") + "\n",
+        "assets/myfx/post_effect/bloom_chain.json": JSON.stringify({
+          targets: {
+            ping_a: { format: "RGBA32F" },
+            pong_b: { format: "RGBA32F" },
+            stage_c: { format: "RGBA32F" },
+            stage_d: { format: "RGBA32F" },
+            history: { persistent: true, format: "RGBA16F" }
+          },
+          passes: [
+            {
+              vertex_shader: "minecraft:core/screenquad",
+              fragment_shader: "myfx:post/bloom_pass",
+              inputs: [{ sampler_name: "In", target: "history" }],
+              output: "ping_a",
+              uniforms: {
+                BloomParams: [
+                  { name: "Intensity", type: "float", value: 1.2 },
+                  { name: "DeadTrailingTint", type: "vec4", value: [1.0, 1.0, 1.0, 1.0] }
+                ]
+              }
+            },
+            {
+              vertex_shader: "minecraft:core/screenquad",
+              fragment_shader: "minecraft:post/blit",
+              inputs: [{ sampler_name: "In", target: "minecraft:main" }],
+              output: "ping_a"
+            },
+            {
+              vertex_shader: "minecraft:core/screenquad",
+              fragment_shader: "minecraft:post/blit",
+              inputs: [{ sampler_name: "In", target: "ping_a" }],
+              output: "pong_b"
+            },
+            {
+              vertex_shader: "minecraft:core/screenquad",
+              fragment_shader: "minecraft:post/blit",
+              inputs: [{ sampler_name: "In", target: "pong_b" }],
+              output: "stage_c"
             }
           ]
         }, null, 2) + "\n"
@@ -1086,8 +1209,21 @@
             });
           }
         });
+
+        // v0.6.0 Post-effect ping-pong overwrite, dead-end chain, and VRAM budget checks (SM080..SM082)
+        const vramInfo = analyzePostEffectVram(file.physical, root, contract.id);
+        vramInfo.findings.forEach(vf => findings.push(vf));
       }
     });
+
+    // v0.6.0 Optional dead-uniform, register pressure & divergent derivative analysis (SM059, SM077..SM079)
+    const pressureEnabled = document.getElementById("pressureCheck") && document.getElementById("pressureCheck").checked;
+    if (pressureEnabled) {
+      effective.filter(f => f.isShaderSource && !f.isGlslInclude).forEach(file => {
+        const pInfo = analyzeGlslPressure(file, contract);
+        pInfo.findings.forEach(pf => findings.push(pf));
+      });
+    }
 
     const sevRank = { error: 0, warning: 1, note: 2 };
     return findings.sort((a, b) => (sevRank[a.severity] - sevRank[b.severity]) || a.file.localeCompare(b.file) || ((a.line || 0) - (b.line || 0)));
@@ -1198,6 +1334,299 @@
       }
     }
     return extracted;
+  }
+
+  const BPP_TABLE = {
+    R8: 1, R8I: 1, R8UI: 1, RG8: 2, RG8I: 2, RG8UI: 2, R16: 2, R16F: 2, R16I: 2, R16UI: 2, DEPTH_COMPONENT16: 2,
+    RGB8: 3, DEPTH_COMPONENT24: 3,
+    RGBA8: 4, SRGB8_ALPHA8: 4, RGBA8I: 4, RGBA8UI: 4, RGB10_A2: 4, R11F_G11F_B10F: 4,
+    RG16: 4, RG16F: 4, RG16I: 4, RG16UI: 4, R32F: 4, R32I: 4, R32UI: 4,
+    DEPTH_COMPONENT: 4, DEPTH24_STENCIL8: 4, DEPTH_COMPONENT32F: 4, DEPTH32F: 4,
+    RGBA16: 8, RGBA16F: 8, RGBA16I: 8, RGBA16UI: 8, RG32F: 8, RG32I: 8, RG32UI: 8, DEPTH32F_STENCIL8: 8,
+    RGBA32F: 16, RGBA32I: 16, RGBA32UI: 16
+  };
+
+  function analyzePostEffectVram(filePath, root, verId) {
+    const outFindings = [];
+    const targetsObj = root && typeof root.targets === "object" && !Array.isArray(root.targets) ? root.targets : {};
+    const passes = Array.isArray(root && root.passes) ? root.passes : [];
+    const extTargets = new Set(Array.isArray(root && root.external_targets) ? root.external_targets : []);
+    const states = {};
+    Object.entries(targetsObj).forEach(([name, cfg]) => {
+      const c = cfg && typeof cfg === "object" ? cfg : {};
+      const fixed = Number.isInteger(c.width) && Number.isInteger(c.height) && c.width > 0 && c.height > 0;
+      const w = fixed ? c.width : 1920;
+      const h = fixed ? c.height : 1080;
+      const fmt = String(c.format || c.pixel_format || "RGBA8").trim().toUpperCase();
+      const bpp = BPP_TABLE[fmt] || 4;
+      states[name] = {
+        name, format: fmt, bpp, width: w, height: h, persistent: Boolean(c.persistent),
+        hasClear: "clear_color" in c, bytes: w * h * bpp,
+        firstWrite: null, lastRead: null, writes: 0, reads: 0, unconsumedPass: null, slot: 0
+      };
+    });
+
+    let bytesRead = 0, bytesWritten = 0, wroteInternal = false, wroteExtOrPers = false;
+    const mainBytes = 1920 * 1080 * 4;
+    passes.forEach((p, idx) => {
+      if (!p || typeof p !== "object") return;
+      const pNum = idx + 1;
+      const sampled = new Set();
+      if (Array.isArray(p.inputs)) {
+        p.inputs.forEach(inp => {
+          if (!inp || typeof inp.target !== "string") return;
+          sampled.add(inp.target);
+          if (inp.target.includes(":") || extTargets.has(inp.target)) {
+            bytesRead += mainBytes;
+          } else if (states[inp.target]) {
+            const st = states[inp.target];
+            bytesRead += st.bytes;
+            st.reads++;
+            st.lastRead = pNum;
+            st.unconsumedPass = null;
+            if (st.persistent && st.writes === 0 && !st.hasClear && st.reads === 1) {
+              outFindings.push({
+                rule: "SM081", severity: "warning", version: verId, file: filePath, line: null,
+                message: `Pass #${pNum} samples persistent temporal target '${inp.target}' before write without 'clear_color'; frame 0 samples uninitialized VRAM.`
+              });
+            }
+          }
+        });
+      }
+      if (typeof p.output === "string") {
+        if (p.output.includes(":") || extTargets.has(p.output)) {
+          bytesWritten += mainBytes;
+          wroteExtOrPers = true;
+        } else if (states[p.output]) {
+          const st = states[p.output];
+          wroteInternal = true;
+          if (st.persistent) wroteExtOrPers = true;
+          bytesWritten += st.bytes;
+          if (st.unconsumedPass !== null && !sampled.has(p.output) && !("blend" in p)) {
+            outFindings.push({
+              rule: "SM080", severity: "warning", version: verId, file: filePath, line: null,
+              message: `Pass #${pNum} overwrites internal render target '${p.output}' before its output from Pass #${st.unconsumedPass} is ever sampled.`
+            });
+          }
+          if (st.firstWrite === null) st.firstWrite = pNum;
+          st.writes++;
+          st.unconsumedPass = pNum;
+        }
+      }
+    });
+
+    if (wroteInternal && !wroteExtOrPers && passes.length > 0) {
+      outFindings.push({
+        rule: "SM081", severity: "warning", version: verId, file: filePath, line: null,
+        message: `Post-effect chain writes to transient internal targets across ${passes.length} pass(es) without ever writing back to 'minecraft:main' or a persistent target.`
+      });
+    }
+
+    const pools = [];
+    Object.values(states).forEach(st => {
+      if (st.persistent) {
+        st.slot = pools.length;
+        pools.push({ slot: st.slot, format: st.format, width: st.width, height: st.height, bytes: st.bytes, busyUntil: 1e9, names: [st.name] });
+      } else if (st.writes === 0 && st.reads === 0) {
+        st.slot = -1;
+      } else {
+        const start = st.firstWrite || 0;
+        const end = Math.max(st.lastRead || 0, st.firstWrite || 0);
+        const reuse = pools.find(pl => pl.busyUntil < start && pl.format === st.format && pl.width === st.width && pl.height === st.height);
+        if (reuse) {
+          st.slot = reuse.slot;
+          reuse.busyUntil = end;
+          reuse.names.push(st.name);
+        } else {
+          st.slot = pools.length;
+          pools.push({ slot: st.slot, format: st.format, width: st.width, height: st.height, bytes: st.bytes, busyUntil: end, names: [st.name] });
+        }
+      }
+    });
+
+    const allocatedBytes = Object.values(states).reduce((a, b) => a + b.bytes, 0);
+    const aliasedBytes = pools.reduce((a, b) => a + b.bytes, 0);
+    const budgetBytes = 128 * 1024 * 1024;
+    if (allocatedBytes > budgetBytes) {
+      outFindings.push({
+        rule: "SM082", severity: "warning", version: verId, file: filePath, line: null,
+        message: `Post-effect allocates ${(allocatedBytes / 1048576).toFixed(2)} MiB at 1920x1080, exceeding the 128.00 MiB VRAM budget (aliased minimum: ${(aliasedBytes / 1048576).toFixed(2)} MiB).`
+      });
+    }
+    return {
+      file: filePath, passCount: passes.length, allocatedBytes, aliasedBytes,
+      bwGbs: ((bytesRead + bytesWritten) * 60) / 1e9, targets: Object.values(states), findings: outFindings
+    };
+  }
+
+  const VEC4_SLOTS = {
+    bool: 1, int: 1, uint: 1, float: 1, vec2: 1, ivec2: 1, uvec2: 1, vec3: 1, ivec3: 1, uvec3: 1,
+    vec4: 1, ivec4: 1, uvec4: 1, mat2: 2, mat3: 3, mat4: 4
+  };
+
+  function analyzeGlslPressure(file, contract) {
+    const out = [];
+    const clean = stripCommentsPreservingLines(file.text);
+    const fnIdx = clean.indexOf("void main");
+    const execBody = fnIdx >= 0 ? clean.slice(clean.indexOf("{", fnIdx) + 1) : "";
+    const usedIdents = new Set((execBody.match(/\b[A-Za-z_]\w*\b/g) || []));
+
+    const sampRe = /uniform\s+[iu]?sampler\w*\s+(\w+)\s*;/g;
+    let m;
+    while ((m = sampRe.exec(clean)) !== null) {
+      if (!usedIdents.has(m[1])) {
+        const ln = clean.slice(0, m.index).split("\n").length;
+        out.push({ rule: "SM059", severity: "warning", version: contract.id, file: file.physical, line: ln, message: `Sampler uniform '${m[1]}' is declared but never sampled in executable shader code.` });
+      }
+    }
+
+    const parsed = parseGlsl(file.text);
+    parsed.blocks.forEach(blk => {
+      if (contract.uniformBlocks[blk.name]) return;
+      const flags = blk.members.map(mem => usedIdents.has(mem.name));
+      if (flags.length && flags.every(f => !f)) {
+        out.push({ rule: "SM059", severity: "warning", version: contract.id, file: file.physical, line: blk.line, message: `Custom uniform block '${blk.name}' is never referenced in executable shader code.` });
+      } else {
+        const lastUsed = flags.lastIndexOf(true);
+        for (let k = lastUsed + 1; k < blk.members.length; k++) {
+          out.push({ rule: "SM059", severity: "warning", version: contract.id, file: file.physical, line: blk.line, message: `Trailing std140 uniform member '${blk.name}.${blk.members[k].name}' is never read and can be pruned safely.` });
+        }
+      }
+    });
+
+    let totalVec4 = 0;
+    const localVars = [];
+    if (execBody) {
+      const bodyLines = execBody.split("\n");
+      const mainStartLine = clean.slice(0, Math.max(0, fnIdx)).split("\n").length;
+      const inNames = new Set();
+      const inRe = /\bin\s+\w+\s+(\w+)\s*;/g;
+      while ((m = inRe.exec(clean)) !== null) inNames.add(m[1]);
+      inNames.add("gl_FragCoord");
+
+      let inDivIf = false;
+      let divDepth = 0;
+      bodyLines.forEach((lnText, idx) => {
+        const srcLine = mainStartLine + idx;
+        const declM = lnText.trim().match(/^(?:const\s+)?(float|int|uint|bool|vec[234]|ivec[234]|uvec[234]|mat[234])\s+(\w+)(?:\s*\[\s*(\d+)\s*\])?(?:\s*=\s*(.+))?;$/);
+        if (declM) {
+          const t = declM[1], vName = declM[2], arr = declM[3] ? parseInt(declM[3], 10) : 1;
+          const slots = (VEC4_SLOTS[t] || 1) * arr;
+          totalVec4 += slots;
+          const restBody = bodyLines.slice(idx + 1).join("\n");
+          const reads = (restBody.match(new RegExp(`\\b${vName}\\b`, "g")) || []).length;
+          const dynIdx = arr > 1 && new RegExp(`\\b${vName}\\s*\\[\\s*(?!\\d+\\s*\\])[^\\]]+\\]`).test(restBody);
+          localVars.push({ name: vName, type: arr > 1 ? `${t}[${arr}]` : t, slots, reads, dynIdx, line: srcLine });
+          if (dynIdx && slots >= 4) {
+            out.push({ rule: "SM077", severity: "warning", version: contract.id, file: file.physical, line: srcLine, message: `Local array '${t} ${vName}[${arr}]' (${slots} vec4 slots) is indexed dynamically, causing GPU VGPR scratch-memory spills.` });
+          }
+          if (reads === 0 && !vName.startsWith("_")) {
+            out.push({ rule: "SM079", severity: "note", version: contract.id, file: file.physical, line: srcLine, message: `Local variable '${t} ${vName}' in 'main()' is assigned and never read.` });
+          }
+        }
+        const ifM = lnText.match(/\bif\s*\(([^)]+)\)/);
+        if (ifM && [...inNames].some(n => new RegExp(`\\b${n}\\b`).test(ifM[1]))) {
+          inDivIf = true;
+          divDepth = 0;
+        }
+        if (inDivIf) {
+          for (const ch of lnText) {
+            if (ch === "{") divDepth++;
+            else if (ch === "}") { divDepth--; if (divDepth <= 0) inDivIf = false; }
+          }
+          if (file.fileName.endsWith(".fsh") && /\b(texture|dFdx|dFdy|fwidth)\s*\(/.test(lnText)) {
+            out.push({ rule: "SM078", severity: "warning", version: contract.id, file: file.physical, line: srcLine, message: "Implicit screen-space derivative or texture() inside non-uniform branch produces undefined quad derivatives; use textureLod() or textureGrad()." });
+          }
+        }
+      });
+      if (totalVec4 > 32) {
+        out.push({ rule: "SM077", severity: "warning", version: contract.id, file: file.physical, line: mainStartLine, message: `Function 'main()' allocates ${totalVec4} vec4 temporary slots, exceeding the 32-vec4 target register budget.` });
+      }
+    }
+    return { file: file.physical, peakVec4: totalVec4, localVars, findings: out };
+  }
+
+  function renderVramAndPressureTelemetry(contract) {
+    const grid = document.getElementById("vramPressureGrid");
+    const summary = document.getElementById("vramPressureSummary");
+    if (!grid) return;
+    const shaderRows = [];
+    const vramCards = [];
+    Object.keys(packFiles).sort().forEach(path => {
+      const info = classifyFile(path.replace(/^[^/]+\/(?=assets\/)/, ""));
+      if (info.isShaderSource && !info.isGlslInclude) {
+        const p = analyzeGlslPressure({ physical: path, text: packFiles[path], fileName: info.fileName }, contract);
+        const occ = p.peakVec4 <= 16 ? "100%" : p.peakVec4 <= 24 ? "75%" : p.peakVec4 <= 32 ? "50%" : "25%";
+        shaderRows.push(`<tr><td><code>${escapeHtml(path)}</code></td><td><code>${p.peakVec4} / 32 vec4</code></td><td><code>${occ}</code></td></tr>`);
+      } else if (info.isPostEffect) {
+        try {
+          const vr = analyzePostEffectVram(path, JSON.parse(packFiles[path]), contract.id);
+          vramCards.push(`<div style="margin-bottom:8px;">
+            <div style="font-family:var(--mono);font-size:0.8rem;margin-bottom:4px;"><strong>${escapeHtml(path)}</strong> (${vr.passCount} passes | ${(vr.allocatedBytes / 1048576).toFixed(2)} MiB alloc | ${(vr.aliasedBytes / 1048576).toFixed(2)} MiB aliased | ${vr.bwGbs.toFixed(2)} GB/s @ 60Hz)</div>
+            <table class="byte-table"><thead><tr><th>Target</th><th>Format</th><th>VRAM (1080p)</th><th>Pool</th></tr></thead><tbody>
+              ${vr.targets.map(t => `<tr><td><code>${escapeHtml(t.name)}</code></td><td><code>${escapeHtml(t.format)}</code></td><td><code>${(t.bytes / 1048576).toFixed(2)} MiB</code></td><td><code>${t.slot >= 0 ? "#" + t.slot : "unused"}</code></td></tr>`).join("") || `<tr><td colspan="4" style="color:var(--muted);">No internal targets</td></tr>`}
+            </tbody></table>
+          </div>`);
+        } catch (_) {}
+      }
+    });
+    summary.textContent = `${shaderRows.length} shader stage(s), ${vramCards.length} post-effect chain(s)`;
+    const left = `<div><div style="margin-bottom:6px;font-weight:600;">Shader Stage VGPR Live-Range Budget</div>
+      <table class="byte-table"><thead><tr><th>Shader</th><th>Temp vec4</th><th>SIMD Occupancy</th></tr></thead><tbody>${shaderRows.join("") || `<tr><td colspan="3" style="color:var(--muted);">No stage shaders</td></tr>`}</tbody></table></div>`;
+    const right = `<div><div style="margin-bottom:6px;font-weight:600;">Post-Effect Render-Target VRAM &amp; Aliasing Pools</div>${vramCards.join("") || `<div style="color:var(--muted);font-size:0.82rem;">No post_effect/*.json files in current pack.</div>`}</div>`;
+    grid.innerHTML = left + right;
+  }
+
+  const STD430_LAYOUT = {
+    float: [4, 4], int: [4, 4], uint: [4, 4], bool: [4, 4],
+    vec2: [8, 8], ivec2: [8, 8], uvec2: [8, 8],
+    vec3: [16, 12], ivec3: [16, 12], uvec3: [16, 12],
+    vec4: [16, 16], ivec4: [16, 16], uvec4: [16, 16],
+    mat4: [16, 64]
+  };
+
+  function renderCustomSsboLayout() {
+    const ed = document.getElementById("customLayoutEditor");
+    const out = document.getElementById("customLayoutOutput");
+    const sum = document.getElementById("customLayoutSummary");
+    if (!ed || !out) return;
+    const clean = stripCommentsPreservingLines(ed.value);
+    const bodyMatch = clean.match(/\{([\s\S]*?)\}/);
+    if (!bodyMatch) {
+      out.innerHTML = `<div style="color:var(--muted);font-size:0.82rem;">Enter a GLSL uniform or buffer block to inspect byte offsets.</div>`;
+      return;
+    }
+    const is430 = /\bstd430\b/.test(clean);
+    const members = [];
+    bodyMatch[1].split(";").forEach(raw => {
+      const m = raw.trim().match(/^(?:(?:readonly|writeonly|coherent)\s+)*(\w+)\s+(\w+)(?:\s*\[\s*(\d+)?\s*\])?$/);
+      if (m) members.push({ type: m[1], name: m[2], arr: m[3] !== undefined ? (m[3] ? parseInt(m[3], 10) : 0) : null });
+    });
+    let off140 = 0, off430 = 0, pad430 = 0;
+    const rows = members.map(mem => {
+      const [a4, s4] = STD430_LAYOUT[mem.type] || [16, 16];
+      const align140 = mem.arr !== null ? Math.max(a4, 16) : a4;
+      const stride140 = mem.arr !== null ? Math.ceil(s4 / align140) * align140 : s4;
+      const align430 = a4;
+      const stride430 = mem.arr !== null ? Math.ceil(s4 / align430) * align430 : s4;
+      const count = mem.arr === null ? 1 : Math.max(mem.arr, 1);
+
+      off140 = Math.ceil(off140 / align140) * align140;
+      const start140 = off140;
+      off140 += (mem.arr !== null ? stride140 * count : s4);
+
+      const aligned430 = Math.ceil(off430 / align430) * align430;
+      pad430 += (aligned430 - off430);
+      off430 = aligned430;
+      const start430 = off430;
+      off430 += (mem.arr !== null ? stride430 * count : s4);
+
+      const label = mem.arr === null ? mem.name : (mem.arr === 0 ? `${mem.name}[]` : `${mem.name}[${mem.arr}]`);
+      const trap = mem.arr !== null && mem.type.endsWith("vec3");
+      return `<tr${trap ? ' class="drift"' : ""}><td><code>${escapeHtml(mem.type)} ${escapeHtml(label)}</code></td><td><code>[${start140}..${off140})</code></td><td><code>[${start430}..${mem.arr === 0 ? "+" + stride430 + "*N" : off430})</code></td><td>${trap ? "vec3 16B stride trap" : `align ${is430 ? align430 : align140}B`}</td></tr>`;
+    });
+    if (sum) sum.textContent = `std140: ${off140}B | std430: ${off430}B (implicit pad: ${pad430}B)`;
+    out.innerHTML = `<table class="byte-table"><thead><tr><th>Member</th><th>std140 Offset</th><th>std430 Offset</th><th>Notes</th></tr></thead><tbody>${rows.join("")}</tbody></table>`;
   }
 
   // std140 byte layout calculator
@@ -1329,6 +1758,7 @@
     }
 
     lastFindings = checkPackAgainstContract(packFiles, selectedVer);
+    renderVramAndPressureTelemetry(selectedVer);
     const errs = lastFindings.filter(f => f.severity === "error").length;
     const warns = lastFindings.filter(f => f.severity === "warning").length;
     document.getElementById("summaryHeader").textContent =
@@ -1376,7 +1806,7 @@
         tool: {
           driver: {
             name: "shadersmith",
-            version: "0.3.0",
+            version: "0.6.0",
             informationUri: "https://github.com/SalyyS1/shadersmith",
             rules: ruleIds.map(id => {
               const m = RULE_META[id] || [id, `ShaderSmith diagnostic ${id}`, "warning"];
@@ -1449,6 +1879,7 @@
   [fromSel, toSel, blkSel].forEach(el => el.addEventListener("change", renderStd140Diff));
   verSel.addEventListener("change", runAudit);
   document.getElementById("rangeCheck").addEventListener("change", runAudit);
+  document.getElementById("pressureCheck").addEventListener("change", runAudit);
   document.getElementById("runCheckBtn").addEventListener("click", runAudit);
   document.getElementById("migrateBtn").addEventListener("click", () => {
     saveEditorToCurrent();
@@ -1481,6 +1912,22 @@
   document.getElementById("presetLegacyBtn").addEventListener("click", () => loadPreset("legacy"));
   document.getElementById("presetOverlayBtn").addEventListener("click", () => loadPreset("overlay"));
   document.getElementById("presetPostFxBtn").addEventListener("click", () => loadPreset("postfx"));
+  document.getElementById("presetSsboOitBtn").addEventListener("click", () => loadPreset("ssboOit"));
+  document.getElementById("presetV06Btn").addEventListener("click", () => loadPreset("v06"));
+
+  const customEd = document.getElementById("customLayoutEditor");
+  if (customEd) {
+    customEd.value = [
+      "layout(std430, binding = 0) buffer ParticleBuffer {",
+      "    float deltaTime;",
+      "    vec3 emitterOrigin;",
+      "    vec3 velocities[4];",
+      "    vec4 positions[];",
+      "};"
+    ].join("\n");
+    customEd.addEventListener("input", renderCustomSsboLayout);
+    renderCustomSsboLayout();
+  }
 
   const dz = document.getElementById("dropzone");
   dz.addEventListener("dragover", ev => { ev.preventDefault(); dz.classList.add("dragover"); });

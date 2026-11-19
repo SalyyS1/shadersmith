@@ -34,6 +34,10 @@ inputs:
     description: 'Enforce Vulkan/Metal SPIR-V intermediate representation contracts (true/false)'
     required: false
     default: 'false'
+  pressure:
+    description: 'Run dead-uniform, register live-range pressure, and divergent derivative analysis (true/false)'
+    required: false
+    default: 'false'
   fail-on-error:
     description: 'Exit non-zero when shader contract findings fail validation (true/false)'
     required: false
@@ -41,7 +45,7 @@ inputs:
   version:
     description: 'ShaderSmith release tag to download'
     required: false
-    default: 'v0.5.0'
+    default: 'v0.6.0'
 
 outputs:
   sarif-file:
@@ -82,6 +86,7 @@ runs:
         INPUT_JSON: ${{ inputs.json }}
         INPUT_STRICT: ${{ inputs.strict }}
         INPUT_SPIRV: ${{ inputs.spirv }}
+        INPUT_PRESSURE: ${{ inputs.pressure }}
         INPUT_FAIL_ON_ERROR: ${{ inputs.fail-on-error }}
       run: |
         set -euo pipefail
@@ -99,6 +104,9 @@ runs:
         fi
         if [ "${INPUT_SPIRV}" = "true" ]; then
           ARGS+=("--spirv")
+        fi
+        if [ "${INPUT_PRESSURE}" = "true" ]; then
+          ARGS+=("--pressure")
         fi
         if [ -n "${INPUT_SARIF}" ]; then
           ARGS+=("--sarif" "${INPUT_SARIF}")

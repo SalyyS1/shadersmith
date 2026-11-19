@@ -11,6 +11,7 @@ import com.salyvn.shadersmith.pipeline.PipelineCompiler
 import com.salyvn.shadersmith.report.Finding
 import com.salyvn.shadersmith.report.Fix
 import com.salyvn.shadersmith.report.Severity
+import com.salyvn.shadersmith.vram.VramCalculator
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
@@ -746,6 +747,12 @@ class ContractChecker(private val contract: VersionContract) {
                 }
             }
         }
+
+        VramCalculator.analyzePostEffect(
+            file = file,
+            versionId = contract.id,
+            out = out,
+        )
     }
 
     private fun parseAndValidateTargets(

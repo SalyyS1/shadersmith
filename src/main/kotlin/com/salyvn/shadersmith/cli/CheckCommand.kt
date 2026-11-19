@@ -3,15 +3,18 @@ package com.salyvn.shadersmith.cli
 import com.github.ajalt.clikt.core.Context
 import com.github.ajalt.clikt.core.ProgramResult
 import com.github.ajalt.clikt.parameters.arguments.argument
+import com.github.ajalt.clikt.parameters.options.default
 import com.github.ajalt.clikt.parameters.options.flag
 import com.github.ajalt.clikt.parameters.options.option
 import com.github.ajalt.clikt.parameters.types.choice
+import com.github.ajalt.clikt.parameters.types.int
 import com.github.ajalt.clikt.parameters.types.path
 import com.salyvn.shadersmith.contract.ContractChecker
 import com.salyvn.shadersmith.contract.PackMetaReader
 import com.salyvn.shadersmith.contract.VersionContract
 import com.salyvn.shadersmith.pack.GlslSource
 import com.salyvn.shadersmith.pack.PackSource
+import com.salyvn.shadersmith.pressure.RegisterPressureAnalyzer
 import com.salyvn.shadersmith.report.ConsoleReporter
 import com.salyvn.shadersmith.report.Finding
 import com.salyvn.shadersmith.report.JsonReporter
@@ -45,7 +48,14 @@ class CheckCommand : ShadersmithCommand(name = "check") {
 
     private val spirv by option("--spirv", help = "Also enforce Vulkan / Metal SPIR-V intermediate representation contracts").flag()
 
+    private val pressure by option("--pressure", help = "Also run dead-uniform, register live-range pressure, and divergent derivative analysis").flag()
+
+    private val maxTemps by option("--max-temps", help = "Maximum live vec4 temporary register budget for --pressure (default: 32)")
+        .int()
+        .default(RegisterPressureAnalyzer.DEFAULT_MAX_VEC4_TEMPS)
+
     override fun execute() {
+        require(maxTemps > 0) { "--max-temps must be a positive integer." }
         if (json && format != null && format != "json") {
             fail("Cannot combine --json with --format $format.")
         }
@@ -59,12 +69,28 @@ class CheckCommand : ShadersmithCommand(name = "check") {
         val versions = targets()
         val findings = versions.flatMap { contract ->
             val baseFindings = ContractChecker(contract).check(source).toMutableList()
-            if (spirv) {
+            if (spirv || pressure) {
                 val overlays = source.packMeta?.let { PackMetaReader.read(it.text)?.overlays } ?: emptyList()
                 val effective = source.effectiveFiles(contract.packFormat, overlays)
+                val glslByPath = effective.filter { it.isShaderSource }.associate { it.relative to GlslSource(it.text) }
                 effective.filter { it.isShaderSource }.forEach { file ->
-                    val src = GlslSource(file.text)
-                    SpirvValidator.checkFile(file, src, contract.id, baseFindings)
+                    val src = glslByPath.getValue(file.relative)
+                    if (spirv) {
+                        SpirvValidator.checkFile(file, src, contract.id, baseFindings)
+                    }
+                    if (pressure) {
+                        val (transStructs, transExec) = PressureCommand.collectTransitiveStructsAndExec(file.relative, glslByPath)
+                        RegisterPressureAnalyzer.checkFile(
+                            file = file,
+                            source = src,
+                            versionId = contract.id,
+                            vanillaUniformBlocks = contract.uniformBlocks.keys,
+                            transitiveStructs = transStructs,
+                            transitiveExecutableCode = transExec,
+                            maxVec4Temps = maxTemps,
+                            out = baseFindings,
+                        )
+                    }
                 }
             }
             baseFindings.sortedWith(compareBy({ it.severity.ordinal }, { it.file }, { it.line ?: 0 }))
